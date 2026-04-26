@@ -1,0 +1,6 @@
+python-dotenv
+requests
+discord.py
+fastapi[standard]
+psycopg2-binary
+asyncpg
