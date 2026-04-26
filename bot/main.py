@@ -27,8 +27,32 @@ def is_me():
 async def hello(interaction: discord.Interaction):
     await interaction.response.send_message("Hello!")
 
+@tree.command(name="info", description="Get info about this bot!")
+async def info(interaction: discord.Interaction):
+    capitaltwo_desc=(
+        "CapitalTwo is a bank that will be on the BraxtonCraft 2 Minecraft server powered by ComputerCraft and Create. "
+        "Money is backed by copper and can be exchanged for other precious metals based on the bank's supply.\n\n"
+        "On the Discord server, no verification is necessary to view your balance and other details. "
+        "All you need to access your account in-game is your Discord username, tag, and a password (WIP).\n\n"
+    )
+    embed = discord.Embed(
+        title="CapitalTwo Info",
+        description=capitaltwo_desc,
+        color=discord.Color.blurple()
+    )
+    embed.add_field(name="Exchange currency", value="The bank holds copper, iron, nickel, brass, and gold, allowing you to withdraw whatever you need.", inline=False)
+    embed.add_field(name="Shop", value="Automate your stores to work offline and deposit profits straight into your account.", inline=False)
+    embed.add_field(name="Send money", value="Send money to other players instantly, even when you aren't playing.", inline=False)
+    embed.add_field(name="Loans", value="Take out loans to fund your big projects. No interest, just a one-time fee.", inline=False)
+
+    try:
+        await interaction.response.send_message("Check your DMs!", ephemeral=True)
+        await interaction.user.send(embed=embed)
+    except discord.Forbidden:
+        await interaction.response.send_message("I couldn't DM you! Make sure your DMs are open.", ephemeral=True)
+
 @tree.command(name="api_test", description="Tests the bank API")
-@is_me
+@is_me()
 async def api_test(interaction: discord.Interaction):
     await interaction.response.defer()
     async with aiohttp.ClientSession() as session:
