@@ -1,7 +1,6 @@
 from pydantic import BaseModel
 from decimal import Decimal
-from enum import Enum
-from app.models.enums import GuildRoleEnum
+from models.enums import GuildRoleEnum
 from datetime import datetime
 
 class PlayerGet(BaseModel):

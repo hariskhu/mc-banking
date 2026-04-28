@@ -57,10 +57,18 @@ async def info(interaction: discord.Interaction):
 
 @tree.command(name="register", description="Register for a bank account")
 async def register(interaction: discord.Interaction):
-    user_id = str(interaction.user.id)
-    user_name = interaction.user.name
+    '''Creates a bank account for the user.'''
+    await interaction.response.defer()
+    async with aiohttp.ClientSession() as session:
+        json={
+            'discord_id': str(interaction.user.id),
+            'discord_username': interaction.user.name
+        }
 
-    await interaction.followup.send(f"{user_name}, {user_id}")
+        async with session.post(f"{API_URL}/players", json=json) as resp:
+            await interaction.followup.send(
+                f"🎊 {interaction.user.display_name} has registered with CapitalTwo! 🎉"
+            )
 
 # Debug commmands
 @tree.command(name="api_test", description="Tests the bank API")

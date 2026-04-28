@@ -1,7 +1,9 @@
 import uvicorn
 from fastapi import FastAPI
+from routers import players, guilds
 
 app = FastAPI()
+app.include_router(players.router, prefix="/players")
 
 @app.get("/")
 async def root():
