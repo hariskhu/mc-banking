@@ -28,6 +28,13 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     else:
         print(f"Unhandled error: {error}")
 
+@tree.error
+async def on_client_connector_error(interaction: discord.Interaction, error: aiohttp.ClientConnectorError):
+    if isinstance(error, app_commands.CheckFailure):
+        await interaction.response.send_message("Error connecting to the bank, please try again later.", ephemeral=True)
+    else:
+        print(f"Unhandled error: {error}")
+
 @tree.command(name="hello", description="Says hello!")
 async def hello(interaction: discord.Interaction):
     await interaction.response.send_message("Hello!")
