@@ -36,18 +36,18 @@ async def hello(interaction: discord.Interaction):
 async def info(interaction: discord.Interaction):
     capitaltwo_desc=(
         "CapitalTwo is a bank that will be on the BraxtonCraft 2 Minecraft server powered by ComputerCraft and Create. "
-        "Money is backed by copper and can be exchanged for other precious metals based on the bank's supply.\n\n"
-        "No verification is necessary to view your balance and other details.\n\n"
+        "Money is backed by copper and can be exchanged for other precious metals based on the bank's supply. "
+        "No verification is necessary to view your balance and other details, just commands in Discord.\n\n"
     )
     embed = discord.Embed(
         title="CapitalTwo Info",
         description=capitaltwo_desc,
         color=discord.Color.blurple()
     )
-    embed.add_field(name="Exchange currency", value="The bank holds copper, iron, nickel, brass, and gold, allowing you to withdraw whatever you need.", inline=False)
-    embed.add_field(name="Shop", value="Buy items from in-game shops using your digital currency.", inline=False)
-    embed.add_field(name="Send money", value="Send money to other players instantly.", inline=False)
-    embed.add_field(name="Guilds", value="Create or join a guild to gain access to extra perks and become the wealthiest guild on the server.", inline=False)
+    embed.add_field(name="💶 Exchange Currency 💴", value="The bank holds copper, iron, nickel, brass, and gold, allowing you to withdraw whatever you need.", inline=False)
+    embed.add_field(name="💸 Send Money 💸", value="Send money to other players instantly.", inline=False)
+    embed.add_field(name="🏛️ Guilds 🛡️", value="Create or join a guild to gain access to extra perks and aim to become the wealthiest.", inline=False)
+    embed.add_field(name="🛒 Shop 🛒", value="Buy items from in-game shops using your digital currency.", inline=False)
 
     try:
         await interaction.response.send_message("Check your DMs!", ephemeral=True)
