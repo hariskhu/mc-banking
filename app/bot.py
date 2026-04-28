@@ -35,6 +35,8 @@ async def on_client_connector_error(interaction: discord.Interaction, error: aio
     else:
         print(f"Unhandled error: {error}")
 
+
+
 @tree.command(name="hello", description="Says hello!")
 async def hello(interaction: discord.Interaction):
     await interaction.response.send_message("Hello!")
@@ -51,10 +53,10 @@ async def info(interaction: discord.Interaction):
         description=capitaltwo_desc,
         color=discord.Color.blurple()
     )
-    embed.add_field(name="💶 Exchange Currency 💴", value="The bank holds copper, iron, nickel, brass, and gold, allowing you to withdraw whatever you need.", inline=False)
-    embed.add_field(name="💸 Send Money 💸", value="Send money to other players instantly.", inline=False)
-    embed.add_field(name="🏛️ Guilds 🛡️", value="Create or join a guild to gain access to extra perks and aim to become the wealthiest.", inline=False)
-    embed.add_field(name="🛒 Shop 🛒", value="Buy items from in-game shops using your digital currency.", inline=False)
+    embed.add_field(name="Exchange Currency 💴", value="The bank holds copper, iron, zinc, brass, and gold, allowing you to withdraw whatever you need.", inline=False)
+    embed.add_field(name="Send Money 💸", value="Send money to other players instantly.", inline=False)
+    embed.add_field(name="Guilds 🏛️", value="Create or join a guild to gain access to extra perks and aim to become the wealthiest.", inline=False)
+    embed.add_field(name="Shop 🛒", value="Buy items from in-game shops using your digital currency.", inline=False)
 
     try:
         await interaction.response.send_message("Check your DMs!", ephemeral=True)
@@ -74,7 +76,7 @@ async def register(interaction: discord.Interaction):
 
         async with session.post(f"{API_URL}/players", json=json) as resp:
             await interaction.followup.send(
-                f"🎊 {interaction.user.display_name} has registered with CapitalTwo! 🎉"
+                f"🎊 <@{interaction.user.id}> has registered with CapitalTwo! 🎉"
             )
 
 # Debug commmands
