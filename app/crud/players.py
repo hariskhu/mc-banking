@@ -3,22 +3,24 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
 
-def exists(db: Session, discord_id: str) -> bool:
+# Helpers
+def player_exists(db: Session, discord_id: str) -> bool:
     '''Returns a boolean based on if a player exists in the database.'''
     return db.execute(
         text("SELECT 1 FROM players WHERE discord_id = :discord_id"),
         {"discord_id": discord_id}
     ).fetchone() is not None
 
+# Funcs
 def get_player(db: Session, entry: pm.PlayerGet):
     '''Returns a row for a player.'''
-    if not exists(db, entry.discord_id):
+    if not player_exists(db, entry.discord_id):
         raise HTTPException(status_code=404, detail="Player is not in the database.")
     query = text("SELECT * FROM players WHERE discord_id = :discord_id")
     return db.execute(query, {"discord_id": entry.discord_id}).fetchone()
 
 def create_player(db: Session, entry: pm.PlayerCreate):
-    if exists(db, entry.discord_id):
+    if player_exists(db, entry.discord_id):
         raise HTTPException(status_code=409, detail="Player has already registered.")
     
     db.execute(
@@ -34,7 +36,7 @@ def player_to_player_transfer(db: Session, entry: pm.PlayerToPlayerTransfer):
     if entry.sender_discord_id == entry.receiver_discord_id:
         raise HTTPException(status_code=400, detail="Cannot transfer to yourself")
 
-    if not exists(db, entry.receiver_discord_id):
+    if not player_exists(db, entry.receiver_discord_id):
         raise HTTPException(
             status_code=404,
             detail="Player is not in the database."

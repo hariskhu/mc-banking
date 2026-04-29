@@ -32,6 +32,7 @@ CREATE TYPE transaction_type AS ENUM (
     'treasury_contribution', 'treasury_withdrawal'
 );
 CREATE TYPE entity_type AS ENUM ('player', 'guild', 'bank');
+CREATE TYPE guild_role AS ENUM ('captain', 'officer', 'member')
 CREATE TYPE ref_type AS ENUM ('deposit_withdrawal', 'loan', 'shop_purchase');
 CREATE TYPE material AS ENUM ('copper', 'iron', 'zinc', 'gold');
 
@@ -62,7 +63,7 @@ CREATE TABLE guild_roles (
     id         SERIAL PRIMARY KEY,
     guild_id   INT NOT NULL REFERENCES guilds (id) ON DELETE CASCADE,
     player_id  INT NOT NULL REFERENCES players (id) ON DELETE CASCADE,
-    role       TEXT NOT NULL,
+    role       guild_roles NOT NULL,
     granted_by INT REFERENCES players (id) ON DELETE SET NULL,
     granted_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (guild_id, player_id)
