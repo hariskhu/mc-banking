@@ -63,7 +63,7 @@ CREATE TABLE guild_roles (
     id         SERIAL PRIMARY KEY,
     guild_id   INT NOT NULL REFERENCES guilds (id) ON DELETE CASCADE,
     player_id  INT NOT NULL REFERENCES players (id) ON DELETE CASCADE,
-    role       guild_roles NOT NULL,
+    role       guild_role NOT NULL,
     granted_by INT REFERENCES players (id) ON DELETE SET NULL,
     granted_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (guild_id, player_id)

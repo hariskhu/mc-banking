@@ -20,11 +20,15 @@ def get_player(db: Session, entry: pm.PlayerGet):
     return db.execute(query, {"discord_id": entry.discord_id}).fetchone()
 
 def create_player(db: Session, entry: pm.PlayerCreate):
+    '''Creates a new player in the database.'''
     if player_exists(db, entry.discord_id):
         raise HTTPException(status_code=409, detail="Player has already registered.")
     
     db.execute(
-        text("INSERT INTO players (discord_id, discord_username) VALUES (:discord_id, :discord_username)"),
+        text("""
+             INSERT INTO players (discord_id, discord_username)
+             VALUES (:discord_id, :discord_username)
+             """),
         entry.model_dump()
     )
     db.commit()
@@ -49,7 +53,7 @@ def player_to_player_transfer(db: Session, entry: pm.PlayerToPlayerTransfer):
             SET balance = balance - :transfer_amount
             WHERE discord_id = :sender_discord_id
               AND balance >= :transfer_amount
-        """),
+            """),
         entry.model_dump()
     )
 
