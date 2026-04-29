@@ -2,7 +2,7 @@ import os
 import aiohttp
 import discord
 from discord import app_commands
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,17 +17,22 @@ intents.members = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
+# DECORATOR FOR TEST COMMANDS
 def is_me():
     def predicate(interaction: discord.Interaction) -> bool:
         return interaction.user.id == MY_USER_ID
     return app_commands.check(predicate)
 
+
+
+# ERROR HANDLING
 @tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
         await interaction.response.send_message("You don't have permission to use this command!", ephemeral=True)
     else:
         print(f"Unhandled error: {error}")
+
 
 @tree.error
 async def on_client_connector_error(interaction: discord.Interaction, error: aiohttp.ClientConnectorError):
@@ -38,12 +43,10 @@ async def on_client_connector_error(interaction: discord.Interaction, error: aio
 
 
 
-@tree.command(name="hello", description="Says hello!")
-async def hello(interaction: discord.Interaction):
-    await interaction.response.send_message("Hello!")
-
-@tree.command(name="info", description="Get info about this bot!")
+# PLAYER COMMANDS
+@tree.command(name="info", description="Get info about CapitalTwo")
 async def info(interaction: discord.Interaction):
+    '''Returns an embed of information about the bot.'''
     capitaltwo_desc=(
         "CapitalTwo is a bank that will be on the BraxtonCraft 2 Minecraft server powered by ComputerCraft and Create. "
         "Money is backed by copper and can be exchanged for other precious metals based on the bank's supply. "
@@ -65,6 +68,7 @@ async def info(interaction: discord.Interaction):
     except discord.Forbidden:
         await interaction.response.send_message("I couldn't DM you! Make sure your DMs are open.", ephemeral=True)
 
+
 @tree.command(name="register", description="Register for a bank account")
 async def register(interaction: discord.Interaction):
     '''Creates a bank account for the user.'''
@@ -82,12 +86,13 @@ async def register(interaction: discord.Interaction):
                 )
             elif resp.status == 409:
                 await interaction.followup.send(
-                    "You already registered!"
+                    "You are already registered!"
                 )
             else:
                 await interaction.followup.send(
                     "Something went wrong while registering, please try again later."
                 )
+
 
 @tree.command(name="balance", description="View current balance")
 async def balance(interaction: discord.Interaction):
@@ -120,21 +125,59 @@ async def balance(interaction: discord.Interaction):
                     "Could not retrieve your balance, please try again later."
                 )
 
-# Debug commmands
-@tree.command(name="api_test", description="Tests the bank API")
-@is_me()
-async def api_test(interaction: discord.Interaction):
-    await interaction.response.defer()
-    async with aiohttp.ClientSession() as session:
-        async with session.get(API_URL) as resp:
-            text = await resp.text()
-            await interaction.followup.send(f"API RESPONSE:\n{text}")
 
+@tree.command(name="transfer", description="Transfer money to another player")
+@app_commands.describe(amount="Amount of money to transfer", receiver="Transfer receiver")
+async def transfer(interaction: discord.Interaction, amount: str, receiver: discord.Member):
+    await interaction.response.defer()
+    try:
+        decimal_amount = Decimal(amount)
+        rounded = decimal_amount.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        await interaction.followup.send(
+            "Invalid transfer amount."
+        )
+        return
+
+    if rounded < Decimal("0.01"):
+        await interaction.followup.send(
+            "Transfer amount must be $0.01 or more when rounded."
+        )
+        return
+        
+    async with aiohttp.ClientSession() as session:
+        json={
+            'sender_discord_id': str(interaction.user.id),
+            'receiver_discord_id': str(receiver.id),
+            'transfer_amount': str(rounded)
+        }
+
+        async with session.post(f"{API_URL}/players/transfer", json=json) as resp:
+            if resp.status == 200:
+                await interaction.followup.send(
+                    f"Sucessfully transferred ${rounded:.2f} to <@{receiver.id}>! 🤑"
+                )
+            elif resp.status == 402:
+                await interaction.followup.send(
+                    f"Insufficient balance to transfer ${rounded:.2f}."
+                )
+            elif resp.status == 404:
+                await interaction.followup.send(
+                    f"Could not find <@{receiver.id}>."
+                )
+            else:
+                await interaction.followup.send(
+                    "Transfer failed, please try again later."
+                )
+
+
+# GUILD COMMANDS
+
+# READY
 @client.event
 async def on_ready():
     tree.copy_global_to(guild=GUILD)
     await tree.sync(guild=GUILD)
-
     print(f'Logged in as {client.user}')
 
 client.run(DISCORD_TOKEN)

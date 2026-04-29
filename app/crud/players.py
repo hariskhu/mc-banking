@@ -1,5 +1,4 @@
 import models.players as pm
-from database import get_db
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
@@ -16,7 +15,7 @@ def get_player(db: Session, entry: pm.PlayerGet):
     if not exists(db, entry.discord_id):
         raise HTTPException(status_code=404, detail="Player is not in the database.")
     query = text("SELECT * FROM players WHERE discord_id = :discord_id")
-    return db.execute(query, entry.discord_id).fetchone()
+    return db.execute(query, {"discord_id": entry.discord_id}).fetchone()
 
 def create_player(db: Session, entry: pm.PlayerCreate):
     if exists(db, entry.discord_id):
@@ -28,3 +27,47 @@ def create_player(db: Session, entry: pm.PlayerCreate):
     )
     db.commit()
     return {"status": "created"}
+
+def player_to_player_transfer(db: Session, entry: pm.PlayerToPlayerTransfer):
+    """Sends money from one player to another."""
+
+    if entry.sender_discord_id == entry.receiver_discord_id:
+        raise HTTPException(status_code=400, detail="Cannot transfer to yourself")
+
+    if not exists(db, entry.receiver_discord_id):
+        raise HTTPException(
+            status_code=404,
+            detail="Player is not in the database."
+        )
+
+    # Deduct
+    result = db.execute(
+        text("""
+            UPDATE players
+            SET balance = balance - :transfer_amount
+            WHERE discord_id = :sender_discord_id
+              AND balance >= :transfer_amount
+        """),
+        entry.model_dump()
+    )
+
+    # Sender not enough funds/doesn't exist
+    if result.rowcount == 0:
+        db.rollback()
+        raise HTTPException(
+            status_code=402,
+            detail="Insufficient balance"
+        )
+
+    # Credit receiver
+    db.execute(
+        text("""
+            UPDATE players
+            SET balance = balance + :transfer_amount
+            WHERE discord_id = :receiver_discord_id
+        """),
+        entry.model_dump()
+    )
+
+    db.commit()
+    return {"status": "successful"}

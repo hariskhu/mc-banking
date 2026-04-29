@@ -1,7 +1,7 @@
 import models.players as pm
 import crud.players as crud
 from database import get_db
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 router = APIRouter()
@@ -13,3 +13,7 @@ async def get_user(entry: pm.PlayerGet, db: Session = Depends(get_db)):
 @router.post("/")
 async def create_user(entry: pm.PlayerCreate, db: Session = Depends(get_db)):
     return crud.create_player(db, entry)
+
+@router.post("/transfer")
+async def transfer(entry: pm.PlayerToPlayerTransfer, db: Session = Depends(get_db)):
+    return crud.player_to_player_transfer(db, entry)

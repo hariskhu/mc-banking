@@ -1,5 +1,6 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from decimal import Decimal
+from typing import Annotated
 from models.enums import GuildRoleEnum
 from datetime import datetime
 
@@ -17,5 +18,16 @@ class PlayerInDB(BaseModel):
     mc_username: str | None = None
     guild_id: int | None = None
     guild_role: GuildRoleEnum | None = None
-    balance: Decimal
+    balance: Annotated[
+        Decimal,
+        Field(max_digits=12, decimal_places=2)
+    ]
     created_at: datetime
+
+class PlayerToPlayerTransfer(BaseModel):
+    sender_discord_id: str
+    receiver_discord_id: str
+    transfer_amount: Annotated[
+        Decimal,
+        Field(max_digits=12, decimal_places=2)
+    ]
