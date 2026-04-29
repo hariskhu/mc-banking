@@ -1,7 +1,7 @@
 import models.players as pm
 import crud.players as crud
 from database import get_db
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 router = APIRouter()

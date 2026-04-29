@@ -2,6 +2,7 @@ import os
 import aiohttp
 import discord
 from discord import app_commands
+from decimal import Decimal
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -75,9 +76,49 @@ async def register(interaction: discord.Interaction):
         }
 
         async with session.post(f"{API_URL}/players", json=json) as resp:
-            await interaction.followup.send(
-                f"🎊 <@{interaction.user.id}> has registered with CapitalTwo! 🎉"
-            )
+            if resp.status == 200:
+                await interaction.followup.send(
+                    f"🎊 <@{interaction.user.id}> has registered with CapitalTwo! 🎉"
+                )
+            elif resp.status == 409:
+                await interaction.followup.send(
+                    "You already registered!"
+                )
+            else:
+                await interaction.followup.send(
+                    "Something went wrong while registering, please try again later."
+                )
+
+@tree.command(name="balance", description="View current balance")
+async def balance(interaction: discord.Interaction):
+    '''Return's a player's balance.'''
+    await interaction.response.defer()
+    async with aiohttp.ClientSession() as session:
+        json={
+            'discord_id': str(interaction.user.id),
+        }
+
+        async with session.get(f"{API_URL}/players", json=json) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                balance = Decimal(data['balance'])
+                avatar_url = interaction.user.display_avatar.url
+
+                embed = discord.Embed(
+                    title=f"{interaction.user.display_name}'s Balance",
+                    description=f"# ${balance:.2f}",
+                    color=discord.Color.green()
+                )
+                embed.set_thumbnail(url=avatar_url)
+                await interaction.followup.send(embed=embed)
+            elif resp.status == 404:
+                await interaction.followup.send(
+                    "You have not registered for an account yet, use `/register` !"
+                )
+            else:
+                await interaction.followup.send(
+                    "Could not retrieve your balance, please try again later."
+                )
 
 # Debug commmands
 @tree.command(name="api_test", description="Tests the bank API")

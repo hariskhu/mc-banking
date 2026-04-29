@@ -6,4 +6,3 @@ psycopg2-binary
 asyncpg
 uvicorn
 SQLAlchemy
-pydantic
