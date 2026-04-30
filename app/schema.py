@@ -39,7 +39,7 @@ CREATE TYPE material AS ENUM ('copper', 'iron', 'zinc', 'gold');
 CREATE TABLE guilds (
     id         SERIAL PRIMARY KEY,
     name       TEXT NOT NULL,
-    leader_id  INT,
+    leader_id  TEXT NOT NULL,
     balance    NUMERIC(18, 2) DEFAULT 0,
     status     guild_status,
     created_at TIMESTAMPTZ DEFAULT NOW()
@@ -57,7 +57,7 @@ CREATE TABLE players (
 
 ALTER TABLE guilds
     ADD CONSTRAINT fk_guilds_leader
-    FOREIGN KEY (leader_id) REFERENCES players (id) ON DELETE RESTRICT;
+    FOREIGN KEY (leader_id) REFERENCES players (discord_id) ON DELETE RESTRICT;
 
 CREATE TABLE guild_roles (
     id         SERIAL PRIMARY KEY,

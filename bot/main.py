@@ -25,6 +25,22 @@ def is_me():
 
 
 
+# HELPERS
+async def get_or_fetch_member(discord_id: int):
+    """Checks for server member in cache, if not present requests."""
+    guild = client.get_guild(GUILD.id) or await client.fetch_guild(GUILD.id)
+    member = guild.get_member(discord_id)
+    if member is not None:
+        return member
+
+    try:
+        member = await guild.fetch_member(discord_id)
+        return member
+    except (discord.NotFound, discord.HTTPException):
+        return None
+
+
+
 # ERROR HANDLING
 @tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -172,6 +188,92 @@ async def transfer(interaction: discord.Interaction, amount: str, receiver: disc
 
 
 # GUILD COMMANDS
+@tree.command(name="create_guild", description="Create a new guild")
+@app_commands.describe(name="Guild name")
+async def create_guild(interaction: discord.Interaction, name: str):
+    await interaction.response.defer()
+    stripped = name.strip()
+    if len(stripped) > 30:
+        await interaction.followup.send(
+            "Guild name must be 30 characters or less."
+        )
+        return
+
+    async with aiohttp.ClientSession() as session:
+        json={
+            'leader_discord_id': str(interaction.user.id),
+            'name': name,
+        }
+
+        async with session.post(f"{API_URL}/guilds", json=json) as resp:
+            if resp.status == 200:
+                await interaction.followup.send(
+                    f"Successfully created your guild: **{name}**! 🏛️"
+                )
+            elif resp.status == 409:
+                await interaction.followup.send(
+                    "You're already in a guild!"
+                )
+            else:
+                await interaction.followup.send(
+                    "Something went wrong when creating your guild, please try again later."
+                )
+
+
+@tree.command(name="leaderboard", description="View guild leaderboard")
+async def leaderboard(interaction: discord.Interaction):
+    await interaction.response.defer()
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{API_URL}/guilds/all") as resp:
+            if resp.status == 200:
+                items = await resp.json()
+                rows = items['items']
+                rows.sort(key=lambda x: Decimal(x['balance']), reverse=True)
+                captain_names = {}
+                for row in rows:
+                    member = await get_or_fetch_member(int(row['leader_id']))
+                    captain_names[row['id']] = member.global_name if member else "Unknown"
+
+                # Lengths
+                max_len_name = max(max(len(row['name']) for row in rows), len('NAME'))
+                max_len_balance = max(max(len(str(row['balance'])) for row in rows), len("BALANCE")) + 1
+                max_len_captain = max(max(len(name) for name in captain_names.values()), len("CAPTAIN"))
+
+                COLSPACE = " " * 5
+                columns = (
+                    f"RANK{COLSPACE}{'NAME':^{max_len_name}}{COLSPACE}"
+                    f"{'CAPTAIN':^{max_len_captain}}{COLSPACE}"
+                    f"{'BALANCE':^{max_len_balance}}{COLSPACE}ID\n"
+                )
+                
+                title = f"{'🏆 Guild Leaderboard 🏆':^{len(columns)}}\n\n"
+                big_line = "-" * len(columns) + "\n"
+                lb = ""
+
+                i = 1
+                last_bal = Decimal(rows[0]['balance']) if rows else 0
+                for row in rows:
+                    cap_name = captain_names[row['id']]
+                    
+                    entry = (
+                        f"{i:^4}{COLSPACE}"
+                        f"{row['name']:^{max_len_name}}{COLSPACE}"
+                        f"{cap_name:^{max_len_captain}}{COLSPACE}"
+                        f"{('$' + row['balance']):^{max_len_balance}}{COLSPACE}"
+                        f"{row['id']:^3}\n"
+                    )
+                    lb += entry
+
+                    bal_val = Decimal(row['balance'])
+                    if bal_val != last_bal:
+                        i += 1
+                    last_bal = bal_val
+
+                await interaction.followup.send(f"```\n{title}{columns}{big_line}{lb}```")
+            else:
+                await interaction.followup.send("Could not retrieve leaderboard.")
+
+
 
 # READY
 @client.event

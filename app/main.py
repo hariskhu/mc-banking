@@ -4,6 +4,7 @@ from routers import players, guilds
 
 app = FastAPI()
 app.include_router(players.router, prefix="/players")
+app.include_router(guilds.router, prefix="/guilds")
 
 @app.get("/")
 async def root():

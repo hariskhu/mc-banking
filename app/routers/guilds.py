@@ -8,6 +8,10 @@ router = APIRouter()
 
 
 # GET Methods
+@router.get("/all", response_model=gm.GuildLeaderboard)
+async def get_guilds(db: Session = Depends(get_db)):
+    data = crud.get_guilds(db)
+    return {'items': data}
 
 
 # POST Methods

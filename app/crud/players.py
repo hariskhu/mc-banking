@@ -11,6 +11,29 @@ def player_exists(db: Session, discord_id: str) -> bool:
         {"discord_id": discord_id}
     ).fetchone() is not None
 
+def get_player_with_id(db: Session, discord_id: str):
+    '''Retrieves a player based off their discord ID.'''
+    '''Returns a row for a player.'''
+    if not player_exists(db, discord_id):
+        raise HTTPException(status_code=404, detail="Player is not in the database.")
+    query = text("SELECT * FROM players WHERE discord_id = :discord_id")
+    return db.execute(query, {"discord_id": discord_id}).fetchone()
+
+def create_player(db: Session, entry: pm.PlayerCreate):
+    '''Creates a new player in the database.'''
+    if player_exists(db, entry.discord_id):
+        raise HTTPException(status_code=409, detail="Player has already registered.")
+    
+    db.execute(
+        text("""
+             INSERT INTO players (discord_id, discord_username)
+             VALUES (:discord_id, :discord_username)
+             """),
+        entry.model_dump()
+    )
+    db.commit()
+    return {"status": "created"}
+
 # Funcs
 def get_player(db: Session, entry: pm.PlayerGet):
     '''Returns a row for a player.'''
