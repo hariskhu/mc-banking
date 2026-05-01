@@ -31,3 +31,15 @@ class PlayerToPlayerTransfer(BaseModel):
         Decimal,
         Field(max_digits=12, decimal_places=2)
     ]
+
+class PlayerWithGuild(BaseModel):
+    id: int
+    discord_id: str
+    discord_username: str
+    mc_username: str | None = None
+    balance: Decimal
+    guild_id: int | None = None
+    guild_name: str | None = None
+    guild_balance: Decimal | None = None
+    guild_role: GuildRoleEnum | None = None
+    created_at: datetime

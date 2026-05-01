@@ -115,10 +115,7 @@ async def balance(interaction: discord.Interaction):
     '''Return's a player's balance.'''
     await interaction.response.defer()
     async with aiohttp.ClientSession() as session:
-        json={
-            'discord_id': str(interaction.user.id),
-        }
-
+        json={'discord_id': str(interaction.user.id)}
         async with session.get(f"{API_URL}/players", json=json) as resp:
             if resp.status == 200:
                 data = await resp.json()
@@ -140,6 +137,44 @@ async def balance(interaction: discord.Interaction):
                 await interaction.followup.send(
                     "Could not retrieve your balance, please try again later."
                 )
+
+@tree.command(name="details", description="View details of a player")
+@app_commands.describe(player="Player you want details about")
+async def details(interaction: discord.Interaction, player: discord.Member):
+    '''Return's a player's name, minecraft name, balance, guild, and guild role.'''
+    await interaction.response.defer()
+    async with aiohttp.ClientSession() as session:
+        player_id = str(player.id)
+        json={'discord_id': player_id}
+        async with session.get(f"{API_URL}/players/details", json=json) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                balance = Decimal(data['balance'])
+                guild_name = data['guild_name']
+                guild_role = data['guild_role']
+                name = player.display_name
+                if guild_role != 'member' and guild_role is not None:
+                    name = guild_role.capitalize() + " " + name
+                mc_username = data['mc_username']
+                avatar_url = player.display_avatar.url
+                
+                title = name + (f"{ (mc_username)}" if mc_username is not None else "")
+
+                profile = f"# Balance: ${balance:.2f} "
+                if guild_name is not None and guild_role is not None:
+                    profile += f"\n### Guild: {guild_name}"
+                embed = discord.Embed(
+                    title=f"{title}",
+                    description=profile,
+                    color=discord.Color.blue()
+                )
+
+                embed.set_thumbnail(url=avatar_url)
+                await interaction.followup.send(embed=embed)
+            elif resp.status == 404:
+                await interaction.followup.send("You have not registered for an account yet, use `/register` !")
+            else:
+                await interaction.followup.send("An unknown error occurred while getting details, please try again later.")
 
 
 @tree.command(name="transfer", description="Transfer money to another player")
@@ -193,7 +228,7 @@ async def transfer(interaction: discord.Interaction, amount: str, receiver: disc
 async def create_guild(interaction: discord.Interaction, name: str):
     await interaction.response.defer()
     stripped = name.strip()
-    if len(stripped) > 30:
+    if not 0 < len(stripped) < 30:
         await interaction.followup.send(
             "Guild name must be 30 characters or less."
         )
@@ -207,17 +242,13 @@ async def create_guild(interaction: discord.Interaction, name: str):
 
         async with session.post(f"{API_URL}/guilds", json=json) as resp:
             if resp.status == 200:
-                await interaction.followup.send(
-                    f"Successfully created your guild: **{name}**! 🏛️"
-                )
+                await interaction.followup.send(f"Successfully created your guild: **{name}**! 🏛️")
+            elif resp.status == 404:
+                await interaction.followup.send("You have not registered for an account yet, use `/register` !")
             elif resp.status == 409:
-                await interaction.followup.send(
-                    "You're already in a guild!"
-                )
+                await interaction.followup.send("You're already in a guild!")
             else:
-                await interaction.followup.send(
-                    "Something went wrong when creating your guild, please try again later."
-                )
+                await interaction.followup.send("Something went wrong when creating your guild, please try again later.")
 
 
 @tree.command(name="leaderboard", description="View guild leaderboard")
@@ -235,9 +266,14 @@ async def leaderboard(interaction: discord.Interaction):
                     captain_names[row['id']] = member.global_name if member else "Unknown"
 
                 # Lengths
-                max_len_name = max(max(len(row['name']) for row in rows), len('NAME'))
-                max_len_balance = max(max(len(str(row['balance'])) for row in rows), len("BALANCE")) + 1
-                max_len_captain = max(max(len(name) for name in captain_names.values()), len("CAPTAIN"))
+                try:
+                    max_len_name = max(max(len(row['name']) for row in rows), len('NAME'))
+                    max_len_balance = max(max(len(str(row['balance'])) for row in rows), len("BALANCE")) + 1
+                    max_len_captain = max(max(len(name) for name in captain_names.values()), len("CAPTAIN"))
+                except ValueError:
+                    max_len_name = len("NAME")
+                    max_len_balance = len("BALANCE")
+                    max_len_captain = len("CAPTAIN")
 
                 COLSPACE = " " * 5
                 columns = (
@@ -273,6 +309,36 @@ async def leaderboard(interaction: discord.Interaction):
             else:
                 await interaction.followup.send("Could not retrieve leaderboard.")
 
+
+
+@tree.command(name="leave_guild", description="Leave the guild you're currently in")
+async def leaderboard(interaction: discord.Interaction):
+    await interaction.response.defer()
+    async with aiohttp.ClientSession() as session:
+        json={'discord_id': str(interaction.user.id)}
+        async with session.post(f"{API_URL}/guilds/leave", json=json) as resp:
+            resp_json = await resp.json()
+
+            if resp.status == 200:
+                guild_name = resp_json['guild_name']
+                is_captain = resp_json['is_captain']
+
+                if is_captain:
+                    await interaction.followup.send(f"Your guild **{guild_name}** has been disbanded.")
+                else:
+                    await interaction.followup.send(f"<@{interaction.user.id}> has left **{guild_name}**.")
+            elif resp.status == 403:
+                await interaction.followup.send("You cannot disband a guild with members.")
+            elif resp.status == 404:
+                await interaction.followup.send("You have not registered for an account yet, use `/register` !")
+            elif resp.status == 409:
+                try:
+                    is_captain = resp_json['is_captain']
+                    await interaction.followup.send("Your treasury balance must be empty to disband the guild.")
+                except:
+                    await interaction.followup.send("You are not in a guild!")
+            else:
+                await interaction.followup.send("Unknown error leaving, please try again later.")
 
 
 # READY

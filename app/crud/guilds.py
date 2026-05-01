@@ -4,19 +4,53 @@ from crud.players import get_player_with_id
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
+from decimal import Decimal
 
 # Helpers
-def is_in_guild(db: Session, discord_id: str) -> bool:
+def in_guild(db: Session, discord_id: str) -> bool:
     '''Returns a boolean based on whether or not a player is in a guild.'''
     player = get_player_with_id(db, discord_id)
-    curr_guild_id = player._mapping['discord_id']
+    curr_guild_id = player._mapping['guild_id']
     return curr_guild_id is not None
+
+def remove_from_guild(db: Session, discord_id: str):
+    '''Removes a player from their current guild.'''
+    if not in_guild(db, discord_id):
+        raise HTTPException(status_code=409, detail="Player is not in a guild.")
+    
+    db.execute(
+        text("""
+             UPDATE players SET guild_id = NULL WHERE id = :discord_id;
+             DELETE FROM guild_roles WHERE player_id = :discord_id;
+             """),
+        {'discord_id': discord_id}
+    )
+
+    db.commit()
+
+def guild_empty(db: Session, guild_id: int):
+    '''Returns a boolean based on if there's only one guild member (the captain).'''
+    rows = db.execute(
+        text("""
+            SELECT COUNT(*)
+            FROM (
+                SELECT 1
+                FROM guild_roles
+                WHERE guild_id = :guild_id
+                LIMIT 2
+            );
+            """),
+        {'guild_id': guild_id}
+    ).fetchall()
+
+    return len(rows) == 1
+
 
 # Funcs
 def create_guild(db: Session, entry: gm.GuildCreate):
     '''Creates a new guild with the creator as leader/captain.'''
     player = get_player_with_id(db, entry.leader_discord_id)
-    curr_guild_id = player._mapping['discord_id']
+    curr_guild_id = player._mapping['guild_id']
     leader_id = player._mapping['id']
 
     if curr_guild_id is not None:
@@ -53,3 +87,60 @@ def create_guild(db: Session, entry: gm.GuildCreate):
 def get_guilds(db: Session):
     '''Returns all rows of the guilds table.'''
     return db.execute(text("SELECT * FROM guilds")).fetchall()
+
+def get_guild(db: Session, guild_id: int):
+    '''Retrieves the guild with the given guild ID.'''
+    row = db.execute(
+        text("SELECT * FROM guilds WHERE id = :id"),
+        {'id': guild_id}
+    ).fetchone()
+
+    db.commit()
+    return row
+
+def get_player_role(db: Session, discord_id: str):
+    '''Retrieves a player's guild role given their discord_id.'''
+    return db.execute(
+        text("""
+             SELECT gr.role 
+             FROM guild_roles gr
+             JOIN players p ON p.id = gr.player_id
+             WHERE p.discord_id = :discord_id
+             """),
+        {"discord_id": discord_id}
+    ).fetchone()
+
+def leave_guild(db: Session, entry: gm.GuildLeave):
+    '''Handles logic for a player leaving a guild.'''
+    player = get_player_with_id(db, entry.discord_id)
+    role_row = get_player_role(db, entry.discord_id)
+    if role_row is None:
+        raise HTTPException(status_code=409, detail="Player is not in a guild.")
+    is_captain = role_row._mapping['role'] == 'captain'
+    
+    guild_id = player._mapping['guild_id']
+    is_empty = guild_empty(db, guild_id)
+    guild = get_guild(db, guild_id)
+    guild_balance = Decimal(guild._mapping['balance'])
+
+    if is_captain:
+        if not is_empty:
+            raise HTTPException(
+                status_code=403,
+                detail="Leader cannot leave their guild with other players in it."
+            )
+        if guild_balance > 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Balance must be empty for leader to leave."
+            )
+        db.execute(
+            text("DELETE FROM guilds WHERE id = :guild_id;"), 
+            {'guild_id': guild_id}
+        )
+        db.commit()
+    else:
+        remove_from_guild(db, entry.discord_id)
+
+    
+    return {'guild_name': guild._mapping['name'], 'is_captain': is_captain}

@@ -32,7 +32,7 @@ CREATE TYPE transaction_type AS ENUM (
     'treasury_contribution', 'treasury_withdrawal'
 );
 CREATE TYPE entity_type AS ENUM ('player', 'guild', 'bank');
-CREATE TYPE guild_role AS ENUM ('captain', 'officer', 'member')
+CREATE TYPE guild_role AS ENUM ('captain', 'officer', 'member');
 CREATE TYPE ref_type AS ENUM ('deposit_withdrawal', 'loan', 'shop_purchase');
 CREATE TYPE material AS ENUM ('copper', 'iron', 'zinc', 'gold');
 
@@ -41,7 +41,7 @@ CREATE TABLE guilds (
     name       TEXT NOT NULL,
     leader_id  TEXT NOT NULL,
     balance    NUMERIC(18, 2) DEFAULT 0,
-    status     guild_status,
+    status     guild_status DEFAULT 'active'
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

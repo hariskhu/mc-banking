@@ -19,6 +19,24 @@ def get_player_with_id(db: Session, discord_id: str):
     query = text("SELECT * FROM players WHERE discord_id = :discord_id")
     return db.execute(query, {"discord_id": discord_id}).fetchone()
 
+def get_player_with_guild(db: Session, discord_id: str):
+    if not player_exists(db, discord_id):
+        raise HTTPException(status=404, detail="Player does not exist in the database.")
+    return db.execute(
+        text("""
+            SELECT 
+                p.*,
+                g.name AS guild_name,
+                g.balance AS guild_balance,
+                gr.role AS guild_role
+            FROM players p
+            LEFT JOIN guilds g ON g.id = p.guild_id
+            LEFT JOIN guild_roles gr ON gr.player_id = p.id AND gr.guild_id = p.guild_id
+            WHERE p.discord_id = :discord_id
+        """),
+        {"discord_id": discord_id}
+    ).fetchone()
+
 def create_player(db: Session, entry: pm.PlayerCreate):
     '''Creates a new player in the database.'''
     if player_exists(db, entry.discord_id):

@@ -11,6 +11,9 @@ router = APIRouter()
 async def get_user(entry: pm.PlayerGet, db: Session = Depends(get_db)):
     return crud.get_player(db, entry)
 
+@router.get("/details", response_model=pm.PlayerWithGuild)
+async def get_user_details(entry: pm.PlayerGet, db: Session = Depends(get_db)):
+    return crud.get_player_with_guild(db, entry.discord_id)
 
 
 # POST methods

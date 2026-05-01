@@ -24,3 +24,10 @@ class GuildLeaderboardRow(BaseModel):
 
 class GuildLeaderboard(BaseModel):
     items: List[GuildLeaderboardRow]
+
+class GuildLeave(BaseModel):
+    discord_id: str
+
+class GuildLeaveReturn(BaseModel):
+    guild_name: str
+    is_captain: bool
