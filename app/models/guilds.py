@@ -31,3 +31,7 @@ class GuildLeave(BaseModel):
 class GuildLeaveReturn(BaseModel):
     guild_name: str
     is_captain: bool
+
+class GuildJoin(BaseModel):
+    discord_id: str
+    guild_id: int

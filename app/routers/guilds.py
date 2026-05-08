@@ -22,3 +22,7 @@ async def create_guild(entry: gm.GuildCreate, db: Session = Depends(get_db)):
 @router.post("/leave", response_model=gm.GuildLeaveReturn)
 async def leave_guild(entry: gm.GuildLeave, db: Session = Depends(get_db)):
     return crud.leave_guild(db, entry)
+
+@router.post("/join")
+async def join(entry: gm.GuildJoin, db: Session = Depends(get_db)):
+    return crud.join_guild(db, entry)

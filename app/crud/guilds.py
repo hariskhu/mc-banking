@@ -84,6 +84,42 @@ def create_guild(db: Session, entry: gm.GuildCreate):
     db.commit()
     return {"status": "created"}
 
+def join_guild(db: Session, entry: gm.GuildJoin):
+    '''Adds a player to a guild.'''
+    player = get_player_with_id(db, entry.discord_id)
+    player_data = player._mapping
+
+    if player_data['guild_id'] is not None:
+        raise HTTPException(status_code=409, detail="Player is already in a guild.")
+
+    guild = get_guild(db, entry.guild_id)
+    if guild is None:
+        raise HTTPException(status_code=404, detail="Guild not found.")
+
+    if guild._mapping['status'] != 'active':
+        raise HTTPException(status_code=403, detail="Guild is not active.")
+
+    db.execute(
+        text("UPDATE players SET guild_id = :guild_id WHERE discord_id = :discord_id;"),
+        {'guild_id': entry.guild_id, 'discord_id': entry.discord_id}
+    )
+
+    db.execute(
+        text("""
+             INSERT INTO guild_roles (guild_id, player_id, role, granted_by)
+             VALUES (:guild_id, :player_id, :role, :granted_by);
+             """),
+        {
+            'guild_id': entry.guild_id,
+            'player_id': player_data['id'],
+            'role': GuildRoleEnum('member'),
+            'granted_by': player_data['id']  # self-joined
+        }
+    )
+
+    db.commit()
+    return {'guild_name': guild._mapping['name'], 'status': 'joined'}
+
 def get_guilds(db: Session):
     '''Returns all rows of the guilds table.'''
     return db.execute(text("SELECT * FROM guilds")).fetchall()

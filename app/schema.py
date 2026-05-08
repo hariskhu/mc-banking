@@ -18,6 +18,7 @@ DROP TABLE IF EXISTS players CASCADE;
 DROP TABLE IF EXISTS guilds CASCADE;
 
 DROP TYPE IF EXISTS guild_status CASCADE;
+DROP TYPE IF EXISTS guild_role CASCADE;
 DROP TYPE IF EXISTS loan_status CASCADE;
 DROP TYPE IF EXISTS transaction_type CASCADE;
 DROP TYPE IF EXISTS entity_type CASCADE;
@@ -41,7 +42,7 @@ CREATE TABLE guilds (
     name       TEXT NOT NULL,
     leader_id  TEXT NOT NULL,
     balance    NUMERIC(18, 2) DEFAULT 0,
-    status     guild_status DEFAULT 'active'
+    status     guild_status DEFAULT 'active',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -75,6 +76,9 @@ CREATE TABLE vault_inventory (
     quantity   INT NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE vault_inventory
+ADD CONSTRAINT non_negative_quantity CHECK (quantity >= 0);
 
 INSERT INTO vault_inventory (material, quantity) VALUES
     ('copper', 0), ('iron', 0), ('zinc', 0), ('gold', 0);
@@ -130,6 +134,16 @@ CREATE TABLE transactions (
     created_at       TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE vault_inventory_log (
+    id          SERIAL PRIMARY KEY,
+    material    material NOT NULL,
+    quantity    INT NOT NULL,
+    delta       INT NOT NULL,
+    reason      transaction_type,
+    ref_tx_id   INT REFERENCES transactions(id),
+    recorded_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE TABLE deposits_and_withdrawals (
     id             SERIAL PRIMARY KEY,
     player_id      INT NOT NULL REFERENCES players (id) ON DELETE RESTRICT,
@@ -140,7 +154,30 @@ CREATE TABLE deposits_and_withdrawals (
     value          NUMERIC(18, 2) NOT NULL,
     is_deposit     BOOLEAN DEFAULT TRUE,
     created_at     TIMESTAMPTZ DEFAULT NOW()
-);
+
+CREATE VIEW current_exchange_rates AS
+SELECT DISTINCT ON (material) *
+FROM exchange_rates
+ORDER BY material, created_at DESC;
+
+CREATE VIEW bank_liquidity AS
+SELECT
+    SUM(vi.quantity * cr.rate) AS total_vault_value,
+    COALESCE((SELECT SUM(balance) FROM players), 0) +
+    COALESCE((SELECT SUM(balance) FROM guilds), 0) AS total_account_balances,
+
+    SUM(vi.quantity * cr.rate) - (
+        COALESCE((SELECT SUM(balance) FROM players), 0) +
+        COALESCE((SELECT SUM(balance) FROM guilds), 0)
+    ) AS excess_supply,
+
+    (SUM(vi.quantity * cr.rate) - (
+        COALESCE((SELECT SUM(balance) FROM players), 0) +
+        COALESCE((SELECT SUM(balance) FROM guilds), 0)
+    )) * 0.8 AS loanable_funds
+
+FROM vault_inventory vi
+JOIN current_exchange_rates cr ON cr.material = vi.material;
 """
 
 try:
