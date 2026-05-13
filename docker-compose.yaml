@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:18.3
+    environment:
+      POSTGRES_DB: bankdb
+      POSTGRES_USER: bankadmin
+      POSTGRES_PASSWORD: test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bankadmin -d bankdb"]
+      interval: 5s
+      retries: 5
+
+  api:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      volumes: 
+        - .:app
+
+  bot:
+    build: .
+    command: python -m bot.main
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy

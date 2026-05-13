@@ -2,7 +2,9 @@ python-dotenv
 requests
 discord.py
 fastapi[standard]
+uvicorn
 psycopg2-binary
 asyncpg
-uvicorn
-SQLAlchemy
+sqlalchemy
+pytest
+pytest-asyncio
