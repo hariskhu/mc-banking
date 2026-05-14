@@ -1,13 +1,14 @@
-# tests/conftest.py
 import pytest
+import pytest_asyncio
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from app.models import Base
+from app.database import Base
 from app.database import get_session
 from app.main import app
 from httpx import AsyncClient, ASGITransport
 
 TEST_URL = "postgresql://bankadmin:test@localhost:5432/bankdb"
+pytest_plugins = ('pytest_asyncio', )
 
 @pytest.fixture(scope="session")
 def engine():
@@ -27,10 +28,11 @@ def session(engine):
     yield s
     s.close()
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def client(session):
-    # Override the DB session so API routes use the test DB
-    app.dependency_overrides[get_session] = lambda: session
+    def override():
+        yield session
+    app.dependency_overrides[get_session] = override
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
     app.dependency_overrides.clear()

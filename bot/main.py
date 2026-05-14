@@ -1,5 +1,4 @@
 import os
-import aiohttp
 import discord
 from discord import app_commands
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
@@ -38,25 +37,6 @@ async def get_or_fetch_member(discord_id: int):
         return member
     except (discord.NotFound, discord.HTTPException):
         return None
-
-
-
-# ERROR HANDLING
-@tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message("You don't have permission to use this command!", ephemeral=True)
-    else:
-        print(f"Unhandled error: {error}")
-
-
-@tree.error
-async def on_client_connector_error(interaction: discord.Interaction, error: aiohttp.ClientConnectorError):
-    if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message("Error connecting to the bank, please try again later.", ephemeral=True)
-    else:
-        print(f"Unhandled error: {error}")
-
 
 
 # PLAYER COMMANDS
