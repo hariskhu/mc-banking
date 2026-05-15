@@ -2,7 +2,7 @@ import discord
 from decimal import Decimal
 from app.database import SessionLocal
 from app.services.guild import add_member, transfer_captaincy, can_withdraw
-from app.services.banking import guild_withdraw
+from app.services.banking import guild_withdraw_approved
 
 class GuildJoinRequestView(discord.ui.View):
     def __init__(self, applicant: discord.Member, captain: discord.Member, timeout: float = 300):
@@ -54,7 +54,7 @@ class GuildJoinRequestView(discord.ui.View):
                     view=None,
                 )
 
-    @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger, emoji="❌")
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger, emoji="✖️")
     async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.responded:
             return
@@ -144,7 +144,7 @@ class TransferCaptaincyView(discord.ui.View):
                     view=None,
                 )
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✖️")
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.responded:
             return
@@ -208,12 +208,12 @@ class GuildWithdrawRequestView(discord.ui.View):
 
         with SessionLocal() as session:
             try:
-                guild_withdraw(session, str(self.applicant.id), self.amount)
+                guild_withdraw_approved(session, str(self.applicant.id), self.amount)
                 await interaction.response.edit_message(
                     embed=discord.Embed(
                         title="Withdrawal Approved",
                         description=(
-                            f"<@{self.applicant.id}>'s withdrawal of **${self.amount:.2f}** "
+                            f"<@{self.applicant.id}>'s withdrawal of **${self.amount:,.2f}** "
                             f"from **{self.guild_name}** was approved by <@{interaction.user.id}>."
                         ),
                         color=discord.Color.green(),
@@ -222,7 +222,7 @@ class GuildWithdrawRequestView(discord.ui.View):
                 )
                 try:
                     await self.applicant.send(
-                        f"Your withdrawal of **${self.amount:.2f}** from **{self.guild_name}** was approved!"
+                        f"Your withdrawal of **${self.amount:,.2f}** from **{self.guild_name}** was approved!"
                     )
                 except discord.Forbidden:
                     pass
@@ -236,7 +236,7 @@ class GuildWithdrawRequestView(discord.ui.View):
                     view=None,
                 )
 
-    @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger, emoji="❌")
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger, emoji="✖️")
     async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.responded:
             return

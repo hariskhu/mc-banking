@@ -144,6 +144,31 @@ def leave_guild(session: Session, discord_id: str):
     session.commit()
 
 
+def get_guild_members(session: Session, discord_id: str) -> list[tuple[Player, GuildMember]]:
+    """Returns all members of the caller's guild with their membership info."""
+    player_id = _get_player_id(session, discord_id)
+    membership = _get_membership(session, player_id)
+
+    rows = session.execute(
+        select(Player, GuildMember)
+        .join(GuildMember, GuildMember.player_id == Player.id)
+        .where(GuildMember.guild_id == membership.guild_id)
+        .order_by(GuildMember.role)
+    ).all()
+    return rows
+
+
+def get_all_guilds(session: Session) -> list[tuple[Guild, Decimal]]:
+    """Returns all guilds with their account balances, sorted by balance descending."""
+    rows = session.execute(
+        select(Guild, Account.balance)
+        .join(Account, Account.owner_id == Guild.id)
+        .where(Account.owner_type == AccountType.guild)
+        .order_by(Account.balance.desc())
+    ).all()
+    return rows
+
+
 def transfer_captaincy(session: Session, captain_discord_id: str, new_captain_discord_id: str):
     if not can_manage_members(session, captain_discord_id):
         raise PermissionError("Only the captain can transfer captaincy")

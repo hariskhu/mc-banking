@@ -212,6 +212,13 @@ def withdraw(session: Session, discord_id: str, amount: Decimal, note: str = Non
     session.commit()
     return txn
 
+def admin_change_player_bal(session: Session, discord_id: str, amount: Decimal) -> Decimal:
+    '''Function used for admin command to edit balances.'''
+    account = _get_player_account(session, discord_id)
+    account.balance += amount
+    new_bal = account.balance
+    session.commit()
+    return new_bal
 
 # ── Guild transfers ───────────────────────────────────────────────────────────
 
@@ -273,6 +280,41 @@ def guild_withdraw(session: Session, discord_id: str, amount: Decimal, note: str
         amount=amount,
         type=TransactionType.transfer,
         note=clean_note(note) or f"Withdrawal from guild {guild.name}",
+    )
+    session.add(txn)
+    session.commit()
+    return txn
+
+def guild_withdraw_approved(session: Session, discord_id: str, amount: Decimal, note: str = None):
+    """
+    Executes a guild withdrawal without role check.
+    Only call this from an already-authorized approval flow.
+    """
+    if amount <= 0:
+        raise ValueError("Withdrawal amount must be positive")
+
+    player_id = _get_player_id(session, discord_id)
+    membership = session.scalar(
+        select(GuildMember).where(GuildMember.player_id == player_id)
+    )
+    if not membership:
+        raise PermissionError("You are not a member of this guild")
+
+    guild = session.get(Guild, membership.guild_id)
+    guild_account = _get_guild_account(session, player_id)
+    if guild_account.balance < amount:
+        raise ValueError("Insufficient guild funds")
+
+    player_account = _get_player_account(session, discord_id)
+    guild_account.balance -= amount
+    player_account.balance += amount
+
+    txn = Transaction(
+        from_account=guild_account.id,
+        to_account=player_account.id,
+        amount=amount,
+        type=TransactionType.transfer,
+        note=clean_note(note) or f"Approved withdrawal from guild {guild.name}",
     )
     session.add(txn)
     session.commit()
