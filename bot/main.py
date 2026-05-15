@@ -3,13 +3,47 @@ import discord
 from discord import app_commands
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from dotenv import load_dotenv
+from app.database import SessionLocal
+
+from app.services.banking import (
+    register_player,
+    get_player,
+    get_player_bal,
+    get_guild_bal,
+    player_transfer,
+    guild_deposit,
+    guild_withdraw
+)
+
+from app.models.guild import GuildRole
+from bot.cogs.ui.guild_views import (
+    GuildJoinRequestView,
+    TransferCaptaincyView,
+    GuildWithdrawRequestView
+)
+from app.services.guild import (
+    get_guild,
+    get_member_role,
+    create_guild,
+    leave_guild,
+    disband_guild,
+    get_guild_by_name,
+    get_guild_captain,
+    is_in_guild,
+    set_member_role,
+    can_manage_members,
+    can_withdraw,
+)
 
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-MY_USER_ID = int(os.getenv('DISCORD_USER_ID'))
-API_URL = os.getenv('BANK_API_URL')
 GUILD = discord.Object(id=int(os.getenv('DISCORD_SERVER_ID')))
+ADMIN_IDS = [
+    int(user_id.strip())
+    for user_id in os.getenv("ADMIN_IDS", "").split(",")
+    if user_id.strip()
+]
 
 intents = discord.Intents.default()
 intents.members = True 
@@ -17,12 +51,26 @@ client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
 # DECORATOR FOR TEST COMMANDS
-def is_me():
-    def predicate(interaction: discord.Interaction) -> bool:
-        return interaction.user.id == MY_USER_ID
+def is_admin():
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if interaction.user.id not in ADMIN_IDS:
+            raise app_commands.CheckFailure(
+                "You are not authorized to use this command."
+            )
+        return True
+
     return app_commands.check(predicate)
 
-
+@tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction,
+    error: app_commands.AppCommandError
+):
+    if isinstance(error, app_commands.CheckFailure):
+        await interaction.response.send_message(
+            str(error),
+            ephemeral=True
+        )
 
 # HELPERS
 async def get_or_fetch_member(discord_id: int):
@@ -39,7 +87,7 @@ async def get_or_fetch_member(discord_id: int):
         return None
 
 
-# PLAYER COMMANDS
+# PLAYER COMMANDS 
 @tree.command(name="info", description="Get info about CapitalTwo")
 async def info(interaction: discord.Interaction):
     '''Returns an embed of information about the bot.'''
@@ -67,258 +115,438 @@ async def info(interaction: discord.Interaction):
 
 @tree.command(name="register", description="Register for a bank account")
 async def register(interaction: discord.Interaction):
-    '''Creates a bank account for the user.'''
+    '''Creates a user and gives them a bank account.'''
     await interaction.response.defer()
-    async with aiohttp.ClientSession() as session:
-        json={
-            'discord_id': str(interaction.user.id),
-            'discord_username': interaction.user.name
-        }
-
-        async with session.post(f"{API_URL}/players", json=json) as resp:
-            if resp.status == 200:
-                await interaction.followup.send(
-                    f"🎊 <@{interaction.user.id}> has registered with CapitalTwo! 🎉"
-                )
-            elif resp.status == 409:
-                await interaction.followup.send(
-                    "You are already registered!"
-                )
-            else:
-                await interaction.followup.send(
-                    "Something went wrong while registering, please try again later."
-                )
+    with SessionLocal() as session:
+        try:
+            register_player(session, str(interaction.user.id))
+            await interaction.followup.send(f"{interaction.user.display_name} has registered with CapitalTwo! 🥳")
+        except ValueError as e:
+            await interaction.followup.send(str(e))
 
 
 @tree.command(name="balance", description="View current balance")
 async def balance(interaction: discord.Interaction):
     '''Return's a player's balance.'''
     await interaction.response.defer()
-    async with aiohttp.ClientSession() as session:
-        json={'discord_id': str(interaction.user.id)}
-        async with session.get(f"{API_URL}/players", json=json) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                balance = Decimal(data['balance'])
-                avatar_url = interaction.user.display_avatar.url
+    with SessionLocal() as session:
+        try:
+            balance = get_player_bal(session, str(interaction.user.id))
+            avatar_url = interaction.user.display_avatar.url
+            embed = discord.Embed(
+                title=f"{interaction.user.display_name}'s Balance",
+                description=f"# ${balance:.2f}",
+                color=discord.Color.green()
+            )
+            embed.set_thumbnail(url=avatar_url)
 
-                embed = discord.Embed(
-                    title=f"{interaction.user.display_name}'s Balance",
-                    description=f"# ${balance:.2f}",
-                    color=discord.Color.green()
-                )
-                embed.set_thumbnail(url=avatar_url)
-                await interaction.followup.send(embed=embed)
-            elif resp.status == 404:
-                await interaction.followup.send(
-                    "You have not registered for an account yet, use `/register` !"
-                )
-            else:
-                await interaction.followup.send(
-                    "Could not retrieve your balance, please try again later."
-                )
+            await interaction.followup.send(embed=embed)
+        except ValueError as e:
+            await interaction.followup.send_message(str(e))
 
-@tree.command(name="details", description="View details of a player")
-@app_commands.describe(player="Player you want details about")
+@tree.command(name="profile", description="View your details")
 async def details(interaction: discord.Interaction, player: discord.Member):
-    '''Return's a player's name, minecraft name, balance, guild, and guild role.'''
+    """Returns a player's name, minecraft name, balance, guild, and guild role."""
     await interaction.response.defer()
-    async with aiohttp.ClientSession() as session:
-        player_id = str(player.id)
-        json={'discord_id': player_id}
-        async with session.get(f"{API_URL}/players/details", json=json) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                balance = Decimal(data['balance'])
-                guild_name = data['guild_name']
-                guild_role = data['guild_role']
-                name = player.display_name
-                if guild_role != 'member' and guild_role is not None:
-                    name = guild_role.capitalize() + " " + name
-                mc_username = data['mc_username']
-                avatar_url = player.display_avatar.url
-                
-                title = name + (f"{ (mc_username)}" if mc_username is not None else "")
 
-                profile = f"# Balance: ${balance:.2f} "
-                if guild_name is not None and guild_role is not None:
-                    profile += f"\n### Guild: {guild_name}"
-                embed = discord.Embed(
-                    title=f"{title}",
-                    description=profile,
-                    color=discord.Color.blue()
-                )
+    with SessionLocal() as session:
+        try:
+            discord_id = str(interaction.user.id)
 
-                embed.set_thumbnail(url=avatar_url)
-                await interaction.followup.send(embed=embed)
-            elif resp.status == 404:
-                await interaction.followup.send("You have not registered for an account yet, use `/register` !")
-            else:
-                await interaction.followup.send("An unknown error occurred while getting details, please try again later.")
+            p = get_player(session, discord_id)
+            balance = get_player_bal(session, discord_id)
+
+            # Guild info optional, player may not be in one
+            try:
+                role = get_member_role(session, discord_id)
+                guild = get_guild(session, discord_id)
+                guild_name = guild.name
+                guild_role = role.value
+            except ValueError:
+                guild_name = None
+                guild_role = None
+
+            # Build title
+            name = player.display_name
+            if guild_role and guild_role != "member":
+                name = guild_role.capitalize() + " " + name
+            title = name + (f" ({p.mc_username})" if p.mc_username else "")
+
+            # Build embed
+            profile = f"# Balance: ${balance:.2f}"
+            if guild_name:
+                profile += f"\n### Guild: {guild_name}"
+
+            embed = discord.Embed(
+                title=title,
+                description=profile,
+                color=discord.Color.blue(),
+            )
+            embed.set_thumbnail(url=player.display_avatar.url)
+            await interaction.followup.send(embed=embed)
+
+        except ValueError:
+            await interaction.followup.send(
+                "That player has not registered for an account yet. They can use `/register` to sign up!"
+            )
 
 
 @tree.command(name="transfer", description="Transfer money to another player")
 @app_commands.describe(amount="Amount of money to transfer", receiver="Transfer receiver")
 async def transfer(interaction: discord.Interaction, amount: str, receiver: discord.Member):
     await interaction.response.defer()
+
+    # Validate amount
     try:
-        decimal_amount = Decimal(amount)
-        rounded = decimal_amount.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+        decimal_amount = Decimal(amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     except InvalidOperation:
-        await interaction.followup.send(
-            "Invalid transfer amount."
-        )
+        await interaction.followup.send("Invalid transfer amount.")
         return
 
-    if rounded < Decimal("0.01"):
-        await interaction.followup.send(
-            "Transfer amount must be $0.01 or more when rounded."
-        )
+    if decimal_amount < Decimal("0.01"):
+        await interaction.followup.send("Transfer amount must be $0.01 or more when rounded.")
         return
-        
-    async with aiohttp.ClientSession() as session:
-        json={
-            'sender_discord_id': str(interaction.user.id),
-            'receiver_discord_id': str(receiver.id),
-            'transfer_amount': str(rounded)
-        }
 
-        async with session.post(f"{API_URL}/players/transfer", json=json) as resp:
-            if resp.status == 200:
-                await interaction.followup.send(
-                    f"Sucessfully transferred ${rounded:.2f} to <@{receiver.id}>! 🤑"
-                )
-            elif resp.status == 402:
-                await interaction.followup.send(
-                    f"Insufficient balance to transfer ${rounded:.2f}."
-                )
-            elif resp.status == 404:
-                await interaction.followup.send(
-                    f"Could not find <@{receiver.id}>."
-                )
+    if receiver.id == interaction.user.id:
+        await interaction.followup.send("You can't transfer money to yourself.")
+        return
+
+    with SessionLocal() as session:
+        try:
+            player_transfer(
+                session,
+                from_discord_id=str(interaction.user.id),
+                to_discord_id=str(receiver.id),
+                amount=decimal_amount,
+            )
+            await interaction.followup.send(
+                f"Successfully transferred ${decimal_amount:.2f} to <@{receiver.id}>! 🤑"
+            )
+        except ValueError as e:
+            msg = str(e)
+            if "Insufficient" in msg:
+                await interaction.followup.send(f"Insufficient balance to transfer ${decimal_amount:.2f}.")
+            elif "not registered" in msg:
+                await interaction.followup.send(f"<@{receiver.id}> doesn't have a bank account yet.")
             else:
-                await interaction.followup.send(
-                    "Transfer failed, please try again later."
-                )
+                await interaction.followup.send(msg)
 
 
 # GUILD COMMANDS
 @tree.command(name="create_guild", description="Create a new guild")
 @app_commands.describe(name="Guild name")
-async def create_guild(interaction: discord.Interaction, name: str):
+async def create_guild_cmd(interaction: discord.Interaction, name: str):
     await interaction.response.defer()
+
     stripped = name.strip()
-    if not 0 < len(stripped) < 30:
-        await interaction.followup.send(
-            "Guild name must be 30 characters or less."
-        )
+    if not 0 < len(stripped) <= 30:
+        await interaction.followup.send("Guild name must be 30 characters or less.")
         return
 
-    async with aiohttp.ClientSession() as session:
-        json={
-            'leader_discord_id': str(interaction.user.id),
-            'name': name,
-        }
-
-        async with session.post(f"{API_URL}/guilds", json=json) as resp:
-            if resp.status == 200:
-                await interaction.followup.send(f"Successfully created your guild: **{name}**! 🏛️")
-            elif resp.status == 404:
-                await interaction.followup.send("You have not registered for an account yet, use `/register` !")
-            elif resp.status == 409:
-                await interaction.followup.send("You're already in a guild!")
+    with SessionLocal() as session:
+        try:
+            create_guild(session, name=stripped, captain_discord_id=str(interaction.user.id))
+            await interaction.followup.send(f"Successfully created your guild: **{stripped}**! 🏛️")
+        except ValueError as e:
+            msg = str(e)
+            if "already exists" in msg:
+                await interaction.followup.send(f"A guild named **{stripped}** already exists.")
+            elif "already in a guild" in msg:
+                await interaction.followup.send("You're already in a guild.")
+            elif "not registered" in msg:
+                await interaction.followup.send("You don't have a bank account yet. Use `/register` first!")
             else:
-                await interaction.followup.send("Something went wrong when creating your guild, please try again later.")
+                await interaction.followup.send(msg)
 
 
-@tree.command(name="leaderboard", description="View guild leaderboard")
+@tree.command(name="leaderboard", description="View guild leaderboard (WIP)")
 async def leaderboard(interaction: discord.Interaction):
     await interaction.response.defer()
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"{API_URL}/guilds/all") as resp:
-            if resp.status == 200:
-                items = await resp.json()
-                rows = items['items']
-                rows.sort(key=lambda x: Decimal(x['balance']), reverse=True)
-                captain_names = {}
-                for row in rows:
-                    member = await get_or_fetch_member(int(row['leader_id']))
-                    captain_names[row['id']] = member.global_name if member else "Unknown"
+    await interaction.followup.send("WIP: check again later")
 
-                # Lengths
-                try:
-                    max_len_name = max(max(len(row['name']) for row in rows), len('NAME'))
-                    max_len_balance = max(max(len(str(row['balance'])) for row in rows), len("BALANCE")) + 1
-                    max_len_captain = max(max(len(name) for name in captain_names.values()), len("CAPTAIN"))
-                except ValueError:
-                    max_len_name = len("NAME")
-                    max_len_balance = len("BALANCE")
-                    max_len_captain = len("CAPTAIN")
+@tree.command(name="join_guild", description="Request to join a guild")
+@app_commands.describe(guild_name="Name of the guild you want to join")
+async def join_guild_cmd(interaction: discord.Interaction, guild_name: str):
+    await interaction.response.defer()
+    with SessionLocal() as session:
+        try:
+            discord_id = str(interaction.user.id)
+            get_player(session, discord_id)
 
-                COLSPACE = " " * 5
-                columns = (
-                    f"RANK{COLSPACE}{'NAME':^{max_len_name}}{COLSPACE}"
-                    f"{'CAPTAIN':^{max_len_captain}}{COLSPACE}"
-                    f"{'BALANCE':^{max_len_balance}}{COLSPACE}ID\n"
-                )
-                
-                title = f"{'🏆 Guild Leaderboard 🏆':^{len(columns)}}\n\n"
-                big_line = "-" * len(columns) + "\n"
-                lb = ""
+            if is_in_guild(session, discord_id):
+                await interaction.followup.send("You're already in a guild.")
+                return
 
-                i = 1
-                last_bal = Decimal(rows[0]['balance']) if rows else 0
-                for row in rows:
-                    cap_name = captain_names[row['id']]
-                    
-                    entry = (
-                        f"{i:^4}{COLSPACE}"
-                        f"{row['name']:^{max_len_name}}{COLSPACE}"
-                        f"{cap_name:^{max_len_captain}}{COLSPACE}"
-                        f"{('$' + row['balance']):^{max_len_balance}}{COLSPACE}"
-                        f"{row['id']:^3}\n"
-                    )
-                    lb += entry
+            guild = get_guild_by_name(session, guild_name)
+            captain_player = get_guild_captain(session, guild.id)
+            captain_discord = await interaction.guild.fetch_member(int(captain_player.discord_id))
 
-                    bal_val = Decimal(row['balance'])
-                    if bal_val != last_bal:
-                        i += 1
-                    last_bal = bal_val
+        except ValueError as e:
+            await interaction.followup.send(str(e))
+            return
 
-                await interaction.followup.send(f"```\n{title}{columns}{big_line}{lb}```")
-            else:
-                await interaction.followup.send("Could not retrieve leaderboard.")
+    # Build the request embed
+    embed = discord.Embed(
+        title="Guild Join Request",
+        description=(
+            f"<@{interaction.user.id}> wants to join **{guild_name}**.\n\n"
+            f"<@{captain_discord.id}>, do you want to accept them?"
+        ),
+        color=discord.Color.blue(),
+    )
+    embed.set_thumbnail(url=interaction.user.display_avatar.url)
+    embed.set_footer(text="This request expires in 5 minutes.")
 
+    view = GuildJoinRequestView(
+        applicant=interaction.user,
+        captain=captain_discord,
+        timeout=300,
+    )
+    msg = await interaction.followup.send(embed=embed, view=view)
+    view.message = msg
 
 
 @tree.command(name="leave_guild", description="Leave the guild you're currently in")
-async def leaderboard(interaction: discord.Interaction):
+async def leave_guild_cmd(interaction: discord.Interaction):
     await interaction.response.defer()
-    async with aiohttp.ClientSession() as session:
-        json={'discord_id': str(interaction.user.id)}
-        async with session.post(f"{API_URL}/guilds/leave", json=json) as resp:
-            resp_json = await resp.json()
 
-            if resp.status == 200:
-                guild_name = resp_json['guild_name']
-                is_captain = resp_json['is_captain']
-
-                if is_captain:
-                    await interaction.followup.send(f"Your guild **{guild_name}** has been disbanded.")
-                else:
-                    await interaction.followup.send(f"<@{interaction.user.id}> has left **{guild_name}**.")
-            elif resp.status == 403:
-                await interaction.followup.send("You cannot disband a guild with members.")
-            elif resp.status == 404:
-                await interaction.followup.send("You have not registered for an account yet, use `/register` !")
-            elif resp.status == 409:
-                try:
-                    is_captain = resp_json['is_captain']
-                    await interaction.followup.send("Your treasury balance must be empty to disband the guild.")
-                except:
-                    await interaction.followup.send("You are not in a guild!")
+    with SessionLocal() as session:
+        try:
+            discord_id = str(interaction.user.id)
+            guild = get_guild(session, discord_id)
+            guild_name = guild.name
+            leave_guild(session, discord_id)
+            await interaction.followup.send(f"<@{interaction.user.id}> has left **{guild_name}**.")
+        except ValueError as e:
+            msg = str(e)
+            if "transfer captaincy" in msg:
+                await interaction.followup.send(
+                    "You're the captain — transfer captaincy or disband the guild before leaving."
+                )
+            elif "not in a guild" in msg:
+                await interaction.followup.send("You're not in a guild.")
+            elif "not registered" in msg:
+                await interaction.followup.send("You don't have a bank account yet. Use `/register` first!")
             else:
-                await interaction.followup.send("Unknown error leaving, please try again later.")
+                await interaction.followup.send(msg)
+
+
+@tree.command(name="disband_guild", description="Disband your guild (captain only)")
+async def disband_guild_cmd(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    with SessionLocal() as session:
+        try:
+            discord_id = str(interaction.user.id)
+            guild = get_guild(session, discord_id)
+            guild_name = guild.name
+            disband_guild(session, discord_id)
+            await interaction.followup.send(f"**{guild_name}** has been disbanded.")
+        except PermissionError:
+            await interaction.followup.send("Only the captain can disband the guild.")
+        except ValueError as e:
+            msg = str(e)
+            if "Drain the guild account" in msg:
+                await interaction.followup.send(
+                    "Your guild account must be empty before disbanding. Withdraw all funds first."
+                )
+            elif "not in a guild" in msg:
+                await interaction.followup.send("You're not in a guild.")
+            elif "not registered" in msg:
+                await interaction.followup.send("You don't have a bank account yet. Use `/register` first!")
+            else:
+                await interaction.followup.send(msg)
+
+
+@tree.command(name="set_role", description="Change a guild member's role (captain only)")
+@app_commands.describe(
+    member="Member to update",
+    role="New role to assign"
+)
+@app_commands.choices(role=[
+    app_commands.Choice(name="Officer", value="officer"),
+    app_commands.Choice(name="Member", value="member"),
+])
+async def set_role_cmd(interaction: discord.Interaction, member: discord.Member, role: app_commands.Choice[str]):
+    await interaction.response.defer()
+
+    if member.id == interaction.user.id:
+        await interaction.followup.send("You cannot change your own role.")
+        return
+
+    with SessionLocal() as session:
+        try:
+            set_member_role(
+                session,
+                captain_discord_id=str(interaction.user.id),
+                target_discord_id=str(member.id),
+                new_role=GuildRole[role.value],
+            )
+            await interaction.followup.send(
+                f"<@{member.id}> is now a guild **{role.name}**."
+            )
+        except PermissionError:
+            await interaction.followup.send("Only the captain can change member roles.")
+        except ValueError as e:
+            msg = str(e)
+            if "not in your guild" in msg:
+                await interaction.followup.send(f"<@{member.id}> is not in your guild.")
+            elif "transfer_captaincy" in msg:
+                await interaction.followup.send("Use `/transfer_captaincy` to transfer leadership.")
+            elif "not registered" in msg:
+                await interaction.followup.send(f"<@{member.id}> doesn't have a bank account.")
+            else:
+                await interaction.followup.send(msg)
+
+
+@tree.command(name="transfer_captaincy", description="Transfer guild leadership to another member (captain only)")
+@app_commands.describe(member="Member to transfer captaincy to")
+async def transfer_captaincy_cmd(interaction: discord.Interaction, member: discord.Member):
+    await interaction.response.defer()
+
+    if member.id == interaction.user.id:
+        await interaction.followup.send("You cannot transfer captaincy to yourself.")
+        return
+
+    with SessionLocal() as session:
+        try:
+            discord_id = str(interaction.user.id)
+            if not can_manage_members(session, discord_id):
+                await interaction.followup.send("Only the captain can transfer captaincy.")
+                return
+
+            if not is_in_guild(session, str(member.id)):
+                await interaction.followup.send(f"<@{member.id}> is not in your guild.")
+                return
+
+            guild = get_guild(session, discord_id)
+            guild_name = guild.name
+
+        except ValueError as e:
+            await interaction.followup.send(str(e))
+            return
+
+    embed = discord.Embed(
+        title="⚠️ Transfer Captaincy",
+        description=(
+            f"Are you sure you want to transfer captaincy of **{guild_name}** to <@{member.id}>?\n\n"
+            f"You will be demoted to officer. This cannot be undone without their cooperation."
+        ),
+        color=discord.Color.orange(),
+    )
+    embed.set_footer(text="This confirmation expires in 2 minutes.")
+
+    view = TransferCaptaincyView(captain=interaction.user, new_captain=member, timeout=120)
+    msg = await interaction.followup.send(embed=embed, view=view)
+    view.message = msg
+
+
+@tree.command(name="guild_deposit", description="Deposit money into your guild account")
+@app_commands.describe(amount="Amount to deposit")
+async def guild_deposit_cmd(interaction: discord.Interaction, amount: str):
+    await interaction.response.defer()
+
+    try:
+        decimal_amount = Decimal(amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        await interaction.followup.send("Invalid amount.")
+        return
+
+    if decimal_amount < Decimal("0.01"):
+        await interaction.followup.send("Amount must be $0.01 or more.")
+        return
+
+    with SessionLocal() as session:
+        try:
+            discord_id = str(interaction.user.id)
+
+            if not is_in_guild(session, discord_id):
+                await interaction.followup.send("You are not in a guild.")
+                return
+
+            guild = get_guild(session, discord_id)
+            guild_deposit(session, discord_id, decimal_amount)
+
+            await interaction.followup.send(
+                f"Successfully deposited **${decimal_amount:.2f}** into **{guild.name}**."
+            )
+
+        except ValueError as e:
+            msg = str(e)
+            if "Insufficient" in msg:
+                await interaction.followup.send(f"Insufficient funds to deposit **${decimal_amount:.2f}**.")
+            elif "not registered" in msg:
+                await interaction.followup.send("You don't have a bank account yet. Use `/register` first!")
+            else:
+                await interaction.followup.send(msg)
+
+
+@tree.command(name="guild_withdraw", description="Withdraw money from your guild account")
+@app_commands.describe(amount="Amount to withdraw")
+async def guild_withdraw_cmd(interaction: discord.Interaction, amount: str):
+    await interaction.response.defer()
+
+    try:
+        decimal_amount = Decimal(amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        await interaction.followup.send("Invalid amount.")
+        return
+
+    if decimal_amount < Decimal("0.01"):
+        await interaction.followup.send("Amount must be $0.01 or more.")
+        return
+
+    with SessionLocal() as session:
+        try:
+            discord_id = str(interaction.user.id)
+            get_player(session, discord_id)
+
+            if not is_in_guild(session, discord_id):
+                await interaction.followup.send("You are not in a guild.")
+                return
+
+            guild = get_guild(session, discord_id)
+            guild_name = guild.name
+
+            # Officers and captains go through immediately
+            if can_withdraw(session, discord_id):
+                guild_withdraw(session, discord_id, decimal_amount)
+                await interaction.followup.send(
+                    f"Successfully withdrew **${decimal_amount:.2f}** from **{guild_name}**."
+                )
+                return
+
+            # Members need approval, check guild funds before creating the request
+            guild_bal = get_guild_bal(session, discord_id)
+            if guild_bal < decimal_amount:
+                await interaction.followup.send(
+                    f"Insufficient guild funds. The guild balance is **${guild_bal:.2f}**."
+                )
+                return
+
+        except ValueError as e:
+            await interaction.followup.send(str(e))
+            return
+
+    embed = discord.Embed(
+        title="Guild Withdrawal Request",
+        description=(
+            f"<@{interaction.user.id}> is requesting a withdrawal of **${decimal_amount:.2f}** "
+            f"from **{guild_name}**.\n\n"
+            f"An officer or captain must approve this request."
+        ),
+        color=discord.Color.blue(),
+    )
+    embed.set_footer(text="This request expires in 5 minutes.")
+
+    view = GuildWithdrawRequestView(
+        applicant=interaction.user,
+        guild_name=guild_name,
+        amount=decimal_amount,
+        timeout=300,
+    )
+    msg = await interaction.followup.send(embed=embed, view=view)
+    view.message = msg
 
 
 # READY

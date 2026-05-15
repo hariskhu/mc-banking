@@ -7,5 +7,5 @@ class Player(Base):
 
     id:           Mapped[int] = mapped_column(primary_key=True)
     discord_id:   Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
-    mc_username:  Mapped[str] = mapped_column(String(64), nullable=False)
+    mc_username:  Mapped[str] = mapped_column(String(64), nullable=True)
     created_at:   Mapped[DateTime] = mapped_column(DateTime, server_default=func.now())

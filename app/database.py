@@ -2,6 +2,9 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class Base(DeclarativeBase):
     pass

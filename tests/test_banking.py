@@ -164,11 +164,11 @@ def test_transfer_negative_raises(session, player_a, player_b):
         player_transfer(session, "111", "222", Decimal("-10.00"))
 
 def test_transfer_unknown_sender_raises(session, player_b):
-    with pytest.raises(ValueError, match="No player account found"):
+    with pytest.raises(ValueError, match="not registered"):
         player_transfer(session, "nonexistent", "222", Decimal("10.00"))
 
 def test_transfer_unknown_recipient_raises(session, player_a):
-    with pytest.raises(ValueError, match="No player account found"):
+    with pytest.raises(ValueError, match="not registered"):
         player_transfer(session, "111", "nonexistent", Decimal("10.00"))
 
 def test_transfer_does_not_affect_third_party(session, player_a, player_b, broke_player):

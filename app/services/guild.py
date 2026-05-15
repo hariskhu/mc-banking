@@ -1,7 +1,6 @@
-# app/services/guild.py
 from decimal import Decimal
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from app.models.guild import Guild, GuildMember, GuildRole
 from app.models.account import Account, AccountType
 from app.models.player import Player
@@ -14,6 +13,37 @@ def _get_player_id(session: Session, discord_id: str) -> int:
     if not player_id:
         raise ValueError(f"Player {discord_id} is not registered")
     return player_id
+
+
+def get_guild(session: Session, discord_id: str) -> Guild:
+    player_id = _get_player_id(session, discord_id)
+    membership = _get_membership(session, player_id)
+    return session.get(Guild, membership.guild_id)
+
+def get_guild_by_name(session: Session, name: str) -> Guild:
+    guild = session.scalar(select(Guild).where(Guild.name == name))
+    if not guild:
+        raise ValueError(f"No guild named '{name}' exists")
+    return guild
+
+
+def get_guild_captain(session: Session, guild_id: int) -> Player:
+    captain_membership = session.scalar(
+        select(GuildMember).where(
+            GuildMember.guild_id == guild_id,
+            GuildMember.role == GuildRole.captain,
+        )
+    )
+    if not captain_membership:
+        raise ValueError("This guild has no captain")
+    return session.get(Player, captain_membership.player_id)
+
+
+def is_in_guild(session: Session, discord_id: str) -> bool:
+    player_id = _get_player_id(session, discord_id)
+    return session.scalar(
+        select(GuildMember).where(GuildMember.player_id == player_id)
+    ) is not None
 
 
 def _get_membership(session: Session, player_id: int) -> GuildMember:
@@ -44,11 +74,7 @@ def create_guild(session: Session, name: str, captain_discord_id: str) -> Guild:
 
     captain_id = _get_player_id(session, captain_discord_id)
 
-    # Prevent creating a guild if already in one
-    existing = session.scalar(
-        select(GuildMember).where(GuildMember.player_id == captain_id)
-    )
-    if existing:
+    if session.scalar(select(GuildMember).where(GuildMember.player_id == captain_id)):
         raise ValueError("You are already in a guild")
 
     guild = Guild(name=name)
@@ -70,11 +96,7 @@ def add_member(session: Session, requestor_discord_id: str, new_discord_id: str)
 
     requestor_membership = _get_membership(session, requestor_id)
 
-    # Check new member isn't already in any guild
-    existing = session.scalar(
-        select(GuildMember).where(GuildMember.player_id == new_player_id)
-    )
-    if existing:
+    if session.scalar(select(GuildMember).where(GuildMember.player_id == new_player_id)):
         raise ValueError("That player is already in a guild")
 
     session.add(GuildMember(
@@ -91,8 +113,8 @@ def remove_member(session: Session, requestor_discord_id: str, target_discord_id
     if not can_manage_members(session, requestor_discord_id):
         raise PermissionError("Only captains can remove members")
 
-    target_id = _get_player_id(session, target_discord_id)
     requestor_id = _get_player_id(session, requestor_discord_id)
+    target_id = _get_player_id(session, target_discord_id)
 
     requestor_membership = _get_membership(session, requestor_id)
     target_membership = session.scalar(
@@ -162,18 +184,37 @@ def disband_guild(session: Session, captain_discord_id: str):
     if guild_account and guild_account.balance > 0:
         raise ValueError("Drain the guild account before disbanding")
 
-    session.execute(
-        select(GuildMember).where(GuildMember.guild_id == guild_id)
-    )
-    members = session.scalars(
-        select(GuildMember).where(GuildMember.guild_id == guild_id)
-    ).all()
-    for m in members:
-        session.delete(m)
+    # Delete all members in one query instead of one-by-one
+    session.execute(delete(GuildMember).where(GuildMember.guild_id == guild_id))
 
     if guild_account:
         session.delete(guild_account)
 
-    guild = session.get(Guild, guild_id)
-    session.delete(guild)
+    session.delete(session.get(Guild, guild_id))
+    session.commit()
+
+
+def set_member_role(session: Session, captain_discord_id: str, target_discord_id: str, new_role: GuildRole):
+    if captain_discord_id == target_discord_id:
+        raise ValueError("You cannot change your own role")
+    if not can_manage_members(session, captain_discord_id):
+        raise PermissionError("Only the captain can change member roles")
+
+    captain_id = _get_player_id(session, captain_discord_id)
+    target_id = _get_player_id(session, target_discord_id)
+
+    captain_membership = _get_membership(session, captain_id)
+    target_membership = session.scalar(
+        select(GuildMember).where(
+            GuildMember.guild_id == captain_membership.guild_id,
+            GuildMember.player_id == target_id,
+        )
+    )
+
+    if not target_membership:
+        raise ValueError("That player is not in your guild")
+    if new_role == GuildRole.captain:
+        raise ValueError("Use /transfer_captaincy to transfer leadership")
+
+    target_membership.role = new_role
     session.commit()

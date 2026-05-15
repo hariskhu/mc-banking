@@ -1,6 +1,6 @@
 import pytest
 import pytest_asyncio
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from app.database import Base
 from app.database import get_session
@@ -17,6 +17,12 @@ def engine():
 @pytest.fixture(autouse=True)
 def fresh_db(engine):
     Base.metadata.drop_all(engine)
+    # Drop enums that persist outside of tables
+    with engine.connect() as conn:
+        conn.execute(text("DROP TYPE IF EXISTS accounttype CASCADE"))
+        conn.execute(text("DROP TYPE IF EXISTS transactiontype CASCADE"))
+        conn.execute(text("DROP TYPE IF EXISTS guildrole CASCADE"))
+        conn.commit()
     Base.metadata.create_all(engine)
     yield
     Base.metadata.drop_all(engine)
