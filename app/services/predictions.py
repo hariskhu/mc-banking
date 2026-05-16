@@ -105,7 +105,7 @@ def resolve_prediction(session: Session, prediction_id: int, outcome: Prediction
     results = {}  # discord_id -> {winning_bet, losing_bet, payout, net}
 
     if winning_pot == 0:
-        _refund_all(session, bets, prediction, reason="No winners — full refund issued")
+        _refund_all(session, bets, prediction, reason="No winners, full refund issued")
         for discord_id, sides in player_bets.items():
             total_bet = sides[PredictionSide.yes] + sides[PredictionSide.no]
             results[discord_id] = {

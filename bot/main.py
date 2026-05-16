@@ -50,6 +50,12 @@ from app.services.predictions import (
     PredictionSide,
 )
 
+from app.services.materials import (
+    get_all_spot_prices,
+    process_deposit,
+    process_withdrawal
+)
+
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
@@ -722,7 +728,7 @@ async def bet_cmd(interaction: discord.Interaction, side: app_commands.Choice[st
             )
         except ValueError as e:
             msg = str(e)
-            if "not registered" in msg:
+            if "No player account" in msg:
                 await interaction.followup.send("You don't have a bank account yet. Use `/register` first!")
             else:
                 await interaction.followup.send(msg)
@@ -952,6 +958,151 @@ async def zz_refund_prediction(interaction: discord.Interaction):
             pass
 
 
+# -------- MATERIALS MARKET/BANK TERMINAL COMMANDS --------
+# Regular commands
+@tree.command(name="exchange_rates", description="View current material exchange rates")
+async def exchange_rates_cmd(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    with SessionLocal() as session:
+        try:
+            rates = get_all_spot_prices(session)
+        except ValueError as e:
+            await interaction.followup.send(str(e))
+            return
+
+    lines = ["**Copper Nugget** — $0.01 *(base currency)*"]
+    for r in rates:
+        if r["mc_id"] == "minecraft:copper_nugget":
+            continue
+        lines.append(f"**{r['name']}** — ${r['spot_price']:,.2f}")
+
+    embed = discord.Embed(
+        title="📊 Exchange Rates",
+        description="\n".join(lines),
+        color=discord.Color.gold(),
+    )
+    await interaction.followup.send(embed=embed)
+
+
+# Admin commands
+
+@tree.command(name="zz_sim_deposit", description="[ADMIN] Simulate a material deposit")
+@app_commands.describe(
+    material="Material mc_id (e.g. minecraft:diamond)",
+    quantity="Quantity to deposit"
+)
+@app_commands.check(is_admin)
+async def zz_sim_deposit(interaction: discord.Interaction, material: str, quantity: int):
+    await interaction.response.defer()
+
+    if quantity <= 0:
+        await interaction.followup.send("Quantity must be positive.")
+        return
+
+    with SessionLocal() as session:
+        try:
+            result = process_deposit(
+                session,
+                str(interaction.user.id),
+                [{"mc_id": material.strip(), "quantity": quantity}]
+            )
+        except ValueError as e:
+            await interaction.followup.send(str(e))
+            return
+
+    b = result["breakdown"][0]
+    embed = discord.Embed(
+        title="🧪 Simulated Deposit",
+        color=discord.Color.green(),
+    )
+    embed.add_field(name="Material", value=b["material"], inline=True)
+    embed.add_field(name="Quantity", value=f"{quantity:,}", inline=True)
+    embed.add_field(name="Value", value=f"**${b['value']:,.2f}**", inline=True)
+    embed.add_field(name="New Supply", value=f"{b['new_supply']:,}", inline=True)
+    embed.add_field(name="New Spot Price", value=f"${b['spot_price']:,.2f}", inline=True)
+    embed.add_field(name="Total Credited", value=f"**${result['total']:,.2f}**", inline=False)
+    await interaction.followup.send(embed=embed)
+
+
+@tree.command(name="zz_sim_withdrawal", description="[ADMIN] Simulate a material withdrawal")
+@app_commands.describe(
+    material="Material mc_id (e.g. minecraft:diamond)",
+    quantity="Quantity to withdraw"
+)
+@app_commands.check(is_admin)
+async def zz_sim_withdrawal(interaction: discord.Interaction, material: str, quantity: int):
+    await interaction.response.defer()
+
+    if quantity <= 0:
+        await interaction.followup.send("Quantity must be positive.")
+        return
+
+    with SessionLocal() as session:
+        try:
+            result = process_withdrawal(
+                session,
+                str(interaction.user.id),
+                [{"mc_id": material.strip(), "quantity": quantity}]
+            )
+        except ValueError as e:
+            await interaction.followup.send(str(e))
+            return
+
+    b = result["breakdown"][0]
+    embed = discord.Embed(
+        title="🧪 Simulated Withdrawal",
+        color=discord.Color.red(),
+    )
+    embed.add_field(name="Material", value=b["material"], inline=True)
+    embed.add_field(name="Quantity", value=f"{quantity:,}", inline=True)
+    embed.add_field(name="Cost", value=f"**${b['cost']:,.2f}**", inline=True)
+    embed.add_field(name="New Supply", value=f"{b['new_supply']:,}", inline=True)
+    embed.add_field(name="New Spot Price", value=f"${b['spot_price']:,.2f}", inline=True)
+    embed.add_field(name="Total Debited", value=f"**${result['total_cost']:,.2f}**", inline=False)
+    await interaction.followup.send(embed=embed)
+
+
+@tree.command(name="zz_bank_supply", description="[ADMIN] View current vault supply for all materials")
+@app_commands.describe(ephemeral="Send as ephemeral message (default: DM)")
+@app_commands.check(is_admin)
+async def zz_bank_supply(interaction: discord.Interaction, ephemeral: bool = False):
+    await interaction.response.defer(ephemeral=ephemeral)
+
+    with SessionLocal() as session:
+        try:
+            rates = get_all_spot_prices(session)
+        except ValueError as e:
+            await interaction.followup.send(str(e), ephemeral=ephemeral)
+            return
+
+    embed = discord.Embed(
+        title="🏦 Vault Supply",
+        color=discord.Color.blue(),
+    )
+
+    for r in rates:
+        supply_pct = (r["current_supply"] / r["ideal_supply"] * 100) if r["ideal_supply"] > 0 else 0
+        bar_filled = min(int(supply_pct / 10), 10)
+        oversupply = supply_pct > 100
+        bar = "█" * bar_filled + ("░" * (10 - bar_filled) if not oversupply else "")
+        supply_str = f"{r['current_supply']:,} / {r['ideal_supply']:,}"
+
+        embed.add_field(
+            name=r["name"],
+            value=(
+                f"`{bar}` {supply_pct:.1f}%{'  ⚠️ OVERSUPPLIED' if oversupply else ''}\n"
+                f"{r['current_supply']:,} / {r['ideal_supply']:,}\n"
+                f"Spot: **${r['spot_price']:,.2f}**"
+            ),
+            inline=True,
+        )
+
+    if ephemeral:
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    else:
+        await interaction.followup.send("Check your DMs!", ephemeral=True)
+        await interaction.user.send(embed=embed)
 
 # READY
 @client.event
