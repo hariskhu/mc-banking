@@ -1,0 +1,14 @@
+[Unit]
+Description=Bank Discord Bot
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/mc-banking
+EnvironmentFile=/home/ubuntu/mc-banking/.env
+ExecStart=/home/ubuntu/mc-banking/.venv/bin/python -m bot.main
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

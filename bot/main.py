@@ -39,6 +39,17 @@ from app.services.guild import (
     get_guild_members
 )
 
+from app.services.predictions import (
+    get_active_prediction,
+    create_prediction,
+    place_bet,
+    get_bets,
+    get_prediction_totals,
+    resolve_prediction,
+    refund_prediction,
+    PredictionSide,
+)
+
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
@@ -71,20 +82,6 @@ async def on_app_command_error(
             str(error),
             ephemeral=True
         )
-
-# HELPERS
-async def get_or_fetch_member(discord_id: int):
-    """Checks for server member in cache, if not present requests."""
-    guild = client.get_guild(GUILD.id) or await client.fetch_guild(GUILD.id)
-    member = guild.get_member(discord_id)
-    if member is not None:
-        return member
-
-    try:
-        member = await guild.fetch_member(discord_id)
-        return member
-    except (discord.NotFound, discord.HTTPException):
-        return None
 
 
 # -------- PLAYER/GUILD COMMANDS --------
@@ -145,7 +142,7 @@ async def balance(interaction: discord.Interaction):
         except ValueError as e:
             msg = str(e)
             if "No player account" in msg:
-                await interaction.followup.send("You do not have an account! Use `/register` !", ephemeral=True)
+                await interaction.followup.send("You do not have an account! Use `/register` !")
             else:
                 await interaction.followup.send(msg)
 
@@ -190,10 +187,12 @@ async def details(interaction: discord.Interaction):
             embed.set_thumbnail(url=interaction.user.display_avatar.url)
             await interaction.followup.send(embed=embed)
 
-        except ValueError:
-            await interaction.followup.send(
-                "That player has not registered for an account yet. They can use `/register` to sign up!"
-            )
+        except ValueError as e:
+            msg = str(e)
+            if "not registered" in msg:
+                await interaction.followup.send("You do not have an account! Use `/register` !")
+            else:
+                await interaction.followup.send(msg)
 
 
 @tree.command(name="transfer", description="Transfer money to another player")
@@ -232,12 +231,11 @@ async def transfer(interaction: discord.Interaction, amount: str, receiver: disc
             if "Insufficient" in msg:
                 await interaction.followup.send(f"Insufficient balance to transfer ${decimal_amount:,.2f}.")
             elif "not registered" in msg:
-                await interaction.followup.send(f"<@{receiver.id}> doesn't have a bank account yet.")
+                await interaction.followup.send(f"Transfer failed, make sure you both have a bank account (`/register`).")
             else:
                 await interaction.followup.send(msg)
 
 
-# GUILD COMMANDS
 @tree.command(name="create_guild", description="Create a new guild")
 @app_commands.describe(name="Guild name")
 async def create_guild_cmd(interaction: discord.Interaction, name: str):
@@ -264,11 +262,6 @@ async def create_guild_cmd(interaction: discord.Interaction, name: str):
                 await interaction.followup.send(msg)
 
 
-@tree.command(name="leaderboard", description="View guild leaderboard (WIP)")
-async def leaderboard(interaction: discord.Interaction):
-    await interaction.response.defer()
-    await interaction.followup.send("WIP: check again later", ephemeral=True)
-
 @tree.command(name="join_guild", description="Request to join a guild")
 @app_commands.describe(guild_name="Name of the guild you want to join")
 async def join_guild_cmd(interaction: discord.Interaction, guild_name: str):
@@ -287,7 +280,11 @@ async def join_guild_cmd(interaction: discord.Interaction, guild_name: str):
             captain_discord = await interaction.guild.fetch_member(int(captain_player.discord_id))
 
         except ValueError as e:
-            await interaction.followup.send(str(e))
+            msg = str(e)
+            if "not registered" in msg:
+                await interaction.followup.send("You do not have an account! Use `/register` !")
+            else:
+                await interaction.followup.send(msg)
             return
 
     # Build the request embed
@@ -399,7 +396,7 @@ async def set_role_cmd(interaction: discord.Interaction, member: discord.Member,
             elif "transfer_captaincy" in msg:
                 await interaction.followup.send("Use `/transfer_captaincy` to transfer leadership.")
             elif "not registered" in msg:
-                await interaction.followup.send(f"<@{member.id}> doesn't have a bank account.")
+                await interaction.followup.send("One of you has not registered, use `/register` first.")
             else:
                 await interaction.followup.send(msg)
 
@@ -428,8 +425,11 @@ async def transfer_captaincy_cmd(interaction: discord.Interaction, member: disco
             guild_name = guild.name
 
         except ValueError as e:
-            await interaction.followup.send(str(e))
-            return
+            msg = str(e)
+            if "not registered" in msg:
+                await interaction.followup.send("One of you has not registered, use `/register` first.")
+            else:
+                await interaction.followup.send(msg)
 
     embed = discord.Embed(
         title="⚠️ Transfer Captaincy",
@@ -481,7 +481,7 @@ async def guild_deposit_cmd(interaction: discord.Interaction, amount: str):
             if "Insufficient" in msg:
                 await interaction.followup.send(f"Insufficient funds to deposit **${decimal_amount:,.2f}**.")
             elif "not registered" in msg:
-                await interaction.followup.send("You don't have a bank account yet. Use `/register` first!", ephemeral=True)
+                await interaction.followup.send("You don't have a bank account yet. Use `/register` first!")
             else:
                 await interaction.followup.send(msg)
 
@@ -530,7 +530,11 @@ async def guild_withdraw_cmd(interaction: discord.Interaction, amount: str):
                 return
 
         except ValueError as e:
-            await interaction.followup.send(str(e))
+            msg = str(e)
+            if "not registered" in msg:
+                await interaction.followup.send("You don't have a bank account yet. Use `/register` first!")
+            else:
+                await interaction.followup.send(msg)
             return
 
     embed = discord.Embed(
@@ -570,7 +574,11 @@ async def guild_info_cmd(interaction: discord.Interaction):
             members = get_guild_members(session, discord_id)
 
         except ValueError as e:
-            await interaction.followup.send(str(e))
+            msg = str(e)
+            if "not registered" in msg:
+                await interaction.followup.send("You don't have a bank account yet. Use `/register` first!")
+            else:
+                await interaction.followup.send(msg)
             return
 
     role_order = {GuildRole.captain: 0, GuildRole.officer: 1, GuildRole.member: 2}
@@ -601,7 +609,11 @@ async def guild_leaderboard_cmd(interaction: discord.Interaction):
         try:
             guilds = get_all_guilds(session)
         except ValueError as e:
-            await interaction.followup.send(str(e))
+            msg = str(e)
+            if "not registered" in msg:
+                await interaction.followup.send("You don't have a bank account yet. Use `/register` first!")
+            else:
+                await interaction.followup.send(msg)
             return
 
     if not guilds:
@@ -651,13 +663,15 @@ async def kick_member_cmd(interaction: discord.Interaction, member: discord.Memb
             elif "leave_guild" in msg:
                 await interaction.followup.send("You cannot kick yourself.")
             elif "not registered" in msg:
-                await interaction.followup.send(f"<@{member.id}> doesn't have a bank account.")
+                await interaction.followup.send(f"One of you does not have a bank account. Use `/register`.")
             else:
                 await interaction.followup.send(msg)
 
-# -------- ADMIN COMMANDS --------
-@tree.command(name="zz_change_player_bal")
-@app_commands.describe(amount="Amount of money to change by", member="Player's account you want to adjust")
+
+# Admin commands (zz_ prefix)
+
+@tree.command(name="zz_change_player_bal", description="[ADMIN] Change's a user's account balance by a given quantity")
+@app_commands.describe(amount="Amount of money", member="Player's account you want to adjust")
 @app_commands.check(is_admin)
 async def zz_change_player_bal(interaction: discord.Interaction, member: discord.Member, amount: str):
     await interaction.response.defer()
@@ -673,7 +687,269 @@ async def zz_change_player_bal(interaction: discord.Interaction, member: discord
             await interaction.followup.send(f"<@{member.id}>'s balance has been changed by ${decimal_amount:,.2f} to ${new_bal:,.2f}.")
     except ValueError as e:
         msg = str(e)
-        await interaction.followup.send(msg)
+        if "not registered" in msg:
+                await interaction.followup.send("You don't have a bank account yet. Use `/register` first!")
+        else:
+            await interaction.followup.send(msg)
+
+
+# -------- PREDICTION MARKET COMMANDS --------
+
+@tree.command(name="prediction_bet", description="Place a bet on the active prediction")
+@app_commands.describe(side="Side to bet on", amount="Amount to bet")
+@app_commands.choices(side=[
+    app_commands.Choice(name="Yes", value="yes"),
+    app_commands.Choice(name="No", value="no"),
+])
+async def bet_cmd(interaction: discord.Interaction, side: app_commands.Choice[str], amount: str):
+    await interaction.response.defer()
+
+    try:
+        decimal_amount = Decimal(amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        await interaction.followup.send("Invalid amount.")
+        return
+
+    if decimal_amount < Decimal("0.01"):
+        await interaction.followup.send("Bet must be at least $0.01.")
+        return
+
+    with SessionLocal() as session:
+        try:
+            place_bet(session, str(interaction.user.id), decimal_amount, PredictionSide[side.value])
+            await interaction.followup.send(
+                f"<@{interaction.user.id}> placed a **${decimal_amount:,.2f}** bet on **{side.name}**! 🎲"
+            )
+        except ValueError as e:
+            msg = str(e)
+            if "not registered" in msg:
+                await interaction.followup.send("You don't have a bank account yet. Use `/register` first!")
+            else:
+                await interaction.followup.send(msg)
+
+
+@tree.command(name="prediction", description="View the active prediction and all bets")
+async def prediction_cmd(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    with SessionLocal() as session:
+        prediction = get_active_prediction(session)
+        if not prediction:
+            await interaction.followup.send("There is no active prediction right now.")
+            return
+
+        bets = get_bets(session, prediction.id)
+        totals = get_prediction_totals(session, prediction.id)
+
+    total_pot = totals[PredictionSide.yes] + totals[PredictionSide.no]
+
+    yes_bets = [b for b in bets if b.side == PredictionSide.yes]
+    no_bets  = [b for b in bets if b.side == PredictionSide.no]
+
+    def bet_lines(bet_list):
+        if not bet_list:
+            return "*No bets yet*"
+        return "\n".join(
+            f"<@{b.discord_id}> — **${b.amount:,.2f}**"
+            for b in bet_list
+        )
+
+    embed = discord.Embed(
+        title=f"🎲 {prediction.question}",
+        color=discord.Color.blue(),
+    )
+    embed.add_field(
+        name=f"✅ Yes — ${totals[PredictionSide.yes]:,.2f}",
+        value=bet_lines(yes_bets),
+        inline=True,
+    )
+    embed.add_field(
+        name=f"❌ No — ${totals[PredictionSide.no]:,.2f}",
+        value=bet_lines(no_bets),
+        inline=True,
+    )
+    embed.set_footer(text=f"Total pot: ${total_pot:,.2f}")
+    await interaction.followup.send(embed=embed)
+
+
+# Admin commands (zz_ prefix)
+
+@tree.command(name="zz_create_prediction", description="[ADMIN] Create a new prediction market")
+@app_commands.describe(question="The prediction question")
+@app_commands.check(is_admin)
+async def zz_create_prediction(interaction: discord.Interaction, question: str):
+    await interaction.response.defer()
+    with SessionLocal() as session:
+        try:
+            prediction = create_prediction(session, question.strip(), str(interaction.user.id))
+            embed = discord.Embed(
+                title="Prediction created! 🎲",
+                description=f"# **{prediction.question}**",
+                color=discord.Color.pink(),
+            )
+            embed.set_footer(text="Use /prediction_bet to place a bet!")
+
+            await interaction.followup.send(embed=embed)
+        except ValueError as e:
+            await interaction.followup.send(str(e))
+
+
+@tree.command(name="zz_resolve_prediction", description="[ADMIN] Resolve the active prediction")
+@app_commands.choices(outcome=[
+    app_commands.Choice(name="Yes", value="yes"),
+    app_commands.Choice(name="No", value="no"),
+])
+@app_commands.check(is_admin)
+async def zz_resolve_prediction(interaction: discord.Interaction, outcome: app_commands.Choice[str]):
+    await interaction.response.defer()
+
+    with SessionLocal() as session:
+        try:
+            prediction = get_active_prediction(session)
+            if not prediction:
+                await interaction.followup.send("There is no active prediction to resolve.")
+                return
+
+            totals = get_prediction_totals(session, prediction.id)
+            total_pot = totals[PredictionSide.yes] + totals[PredictionSide.no]
+            question = prediction.question
+
+            results = resolve_prediction(session, prediction.id, PredictionSide[outcome.value])
+
+        except ValueError as e:
+            await interaction.followup.send(str(e))
+            return
+
+    color = discord.Color.red() if outcome.name == "No" else discord.Color.green()
+    embed = discord.Embed(
+                title="Prediction resolved! 🎲",
+                description=(
+                    f"**{question}** resolved as **{outcome.name}**!\n\n"
+                    f"Total pot of **${total_pot:,.2f}** distributed to winners. 🏆"
+                ),
+                color=color,
+    )
+
+    await interaction.followup.send(embed=embed)
+
+    # DM each participant
+    for discord_id, result in results.items():
+        try:
+            user = await interaction.client.fetch_user(int(discord_id))
+            if user is None:
+                print(f"User {discord_id} not found, skipping")
+                continue
+
+            winning_bet = result["winning_bet"]
+            losing_bet  = result["losing_bet"]
+            payout      = result["payout"]
+            won         = result["won"]
+            net         = payout - (winning_bet + losing_bet)
+
+            if won is None:
+                dm_embed = discord.Embed(
+                    title="Prediction Resolved",
+                    description=question,
+                    color=discord.Color.gold()
+                )
+                dm_embed.add_field(
+                    name="Result",
+                    value=(
+                        "Nobody bet on the winning side.\n"
+                        f"Your total bet of **${result['refund']:,.2f}** has been refunded."
+                    ),
+                    inline=False
+                )
+            elif won:
+                dm_embed = discord.Embed(
+                    title="Prediction Resolved ✅",
+                    description=f"#{question}",
+                    color=discord.Color.green()
+                )
+                dm_embed.add_field(name="Outcome", value=f"**{outcome.name}**", inline=False)
+                if winning_bet > 0:
+                    dm_embed.add_field(
+                        name="Winning Bet",
+                        value=f"**${winning_bet:,.2f}** → **${payout:,.2f}**",
+                        inline=True
+                    )
+                if losing_bet > 0:
+                    dm_embed.add_field(
+                        name="Losing Bet",
+                        value=f"**${losing_bet:,.2f}** → **$0.00**",
+                        inline=True
+                    )
+                dm_embed.add_field(
+                    name="Net Result",
+                    value=f"**{'+' if net >= 0 else ''}${net:,.2f}** 🎉",
+                    inline=False
+                )
+            else:
+                total_bet = winning_bet + losing_bet
+                dm_embed = discord.Embed(
+                    title="Prediction Resolved ❌",
+                    description=f"#{question}",
+                    color=discord.Color.red()
+                )
+                dm_embed.add_field(name="Outcome", value=f"**{outcome.name}** — You lost", inline=False)
+                dm_embed.add_field(
+                    name="Bet Summary",
+                    value=(
+                        f"Total Bet: **${total_bet:,.2f}**\n"
+                        f"Payout: **$0.00**\n"
+                        f"Loss: **-${total_bet:,.2f}** 😔"
+                    ),
+                    inline=False
+                )
+
+            await user.send(embed=dm_embed)
+            print(f"DM sent to {discord_id}")
+
+        except discord.Forbidden:
+            print(f"Forbidden — {discord_id} has DMs closed")
+        except discord.NotFound:
+            print(f"NotFound — {discord_id} doesn't exist")
+        except Exception as e:
+            print(f"Unexpected error DMing {discord_id}: {e}")
+
+
+@tree.command(name="zz_refund_prediction", description="[ADMIN] Refund all bets on the active prediction")
+@app_commands.check(is_admin)
+async def zz_refund_prediction(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    with SessionLocal() as session:
+        try:
+            prediction = get_active_prediction(session)
+            if not prediction:
+                await interaction.followup.send("There is no active prediction to refund.")
+                return
+
+            question = prediction.question
+            bets = refund_prediction(session, prediction.id)
+
+        except ValueError as e:
+            await interaction.followup.send(str(e))
+            return
+
+    embed = discord.Embed(
+        title=f"Prediction for **{question}** cancelled",
+        description=f"All **{len(bets)}** bet{'s' if len(bets) != 1 else ''} have been refunded. 💸",
+        color=discord.Color.yellow()
+    )
+    await interaction.followup.send(embed=embed)
+
+    for bet in bets:
+        try:
+            user = await interaction.client.fetch_user(int(bet.discord_id))
+            dm_embed = discord.Embed(
+                title=f"Prediction cancelled: **{question}**",
+                description=f"Your bets have been refunded. 💸",
+                color=discord.Color.yellow()
+            )
+            await user.send(embed=dm_embed)
+        except (discord.Forbidden, discord.NotFound):
+            pass
 
 
 

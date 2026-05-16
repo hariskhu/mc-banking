@@ -217,3 +217,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Deployment scripts
+deploy.sh
+start.sh
+stop.sh
