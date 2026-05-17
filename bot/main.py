@@ -178,7 +178,7 @@ async def set_minecraft_name_cmd(interaction: discord.Interaction, username: str
         except ValueError as e:
             await interaction.followup.send(str(e))
 
-@tree.command(name="details", description="View details of a player")
+@tree.command(name="profile", description="View a player's profile")
 @app_commands.describe(player="Player you want details about")
 async def details(interaction: discord.Interaction, player: discord.Member):
     """Returns a player's name, minecraft name, balance, guild, and guild role."""
