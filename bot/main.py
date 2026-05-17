@@ -232,9 +232,12 @@ async def details(interaction: discord.Interaction, player: discord.Member):
         name = guild_role.capitalize() + " " + name
 
     # Build embed
-    profile = f"# Balance: ${balance:,.2f}"
+    
     if guild_name:
-        profile += f"\n### Guild: {guild_name}"
+        profile = f"### {guild_name}\n"
+        profile +=f"## ${balance:,.2f}"
+    else:
+        profile = f"## ${balance:,.2f}"
 
     embed = discord.Embed(
         title=name,
