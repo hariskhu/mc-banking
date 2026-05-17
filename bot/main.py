@@ -217,7 +217,7 @@ async def details(interaction: discord.Interaction, player: discord.Member):
         profile += f"\n### Guild: {guild_name}"
 
     embed = discord.Embed(
-        title=title,
+        title=name,
         description=profile,
         color=discord.Color.blue(),
     )
