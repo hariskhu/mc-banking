@@ -1,5 +1,6 @@
 import os
 import discord
+import logging
 from discord import app_commands
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from dotenv import load_dotenv
@@ -62,6 +63,7 @@ from app.services.materials import (
 
 load_dotenv()
 
+
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 GUILD = discord.Object(id=int(os.getenv('DISCORD_SERVER_ID')))
 ADMIN_IDS = [
@@ -78,11 +80,30 @@ material_choices = [
     app_commands.Choice(name="Diamond",       value="minecraft:diamond"),
 ]
 
+# Bot setup
 intents = discord.Intents.default()
 intents.members = True 
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
+
+# Logging
 discord.utils.setup_logging()
+logger = logging.getLogger(__name__)
+
+# Intercept interactions to log commands
+@client.event
+async def on_interaction(interaction: discord.Interaction):
+    if interaction.type == discord.InteractionType.application_command:
+        # Safely grab choices/arguments
+        options = interaction.data.get("options", [])
+        args = ", ".join([f"{opt['name']}: {opt['value']}" for opt in options])
+        arg_string = f" with args ({args})" if args else ""
+        
+        logger.info(
+            f"Slash Command '/{interaction.data['name']}' "
+            f"used by {interaction.user} (ID: {interaction.user.id}){arg_string}"
+        )
+
 
 def is_admin(interaction: discord.Interaction) -> bool:
     if interaction.user.id not in ADMIN_IDS:
