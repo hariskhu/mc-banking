@@ -69,6 +69,7 @@ ADMIN_IDS = [
     for user_id in os.getenv("ADMIN_IDS", "").split(",")
     if user_id.strip()
 ]
+
 material_choices = [
     app_commands.Choice(name="Copper Nugget", value="minecraft:copper_nugget"),
     app_commands.Choice(name="Zinc Nugget",   value="create:zinc_nugget"),
@@ -81,6 +82,7 @@ intents = discord.Intents.default()
 intents.members = True 
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
+discord.utils.setup_logging()
 
 def is_admin(interaction: discord.Interaction) -> bool:
     if interaction.user.id not in ADMIN_IDS:
