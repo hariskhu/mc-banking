@@ -149,10 +149,10 @@ def player_transfer(
 
     # Load both with locks
     accounts = {
-        acc.id: acc
+        acc.owner_id: acc
         for acc in session.scalars(
             select(Account)
-            .where(Account.id.in_([first_id, second_id]))
+            .where(Account.owner_id.in_([first_id, second_id]))
             .with_for_update()
         ).all()
     }
