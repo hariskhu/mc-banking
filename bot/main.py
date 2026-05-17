@@ -207,10 +207,9 @@ async def details(interaction: discord.Interaction, player: discord.Member):
             return
 
     # Build title
-    name = player.display_name
+    name = p.mc_username if p.mc_username else player.display_name 
     if guild_role and guild_role != "member":
         name = guild_role.capitalize() + " " + name
-    title = name + (f" ({p.mc_username})" if p.mc_username else "")
 
     # Build embed
     profile = f"# Balance: ${balance:,.2f}"
