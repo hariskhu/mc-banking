@@ -7,9 +7,9 @@ from app.models.transaction import Transaction, TransactionType
 from app.services.banking import _get_player_account, _get_player_id
 import math
 
-# TODO: TUNE ELASTICITIES
 ELASTICITY = Decimal("0.5")
-COPPER_INFLUENCE = Decimal("0.2")
+COPPER_INFLUENCE = Decimal("0.15")
+PRICE_CAP_MULTIPLIER = Decimal("5") # max price is 4x base price
 
 def seed_materials(session: Session):
     '''Seeds the database with material values.'''
@@ -25,8 +25,8 @@ def seed_materials(session: Session):
         {"name": "Zinc Nugget",    "mc_id": "create:zinc_nugget",      "base_price": Decimal("0.06"),  "ideal_supply": ideal_zinc},
         {"name": "Iron Nugget",    "mc_id": "minecraft:iron_nugget",   "base_price": Decimal("0.08"),  "ideal_supply": ideal_iron},
         {"name": "Gold Nugget",    "mc_id": "minecraft:gold_nugget",   "base_price": Decimal("0.12"), "ideal_supply": ideal_gold},
-        # Diamonds convert to 32 copper ingots at base price, 288 nuggets
-        {"name": "Diamond", "mc_id": "minecraft:diamond",      "base_price": Decimal("2.88"), "ideal_supply": ideal_diamond},
+        # Diamonds convert to 64 copper ingots at base price, 288 nuggets
+        {"name": "Diamond",        "mc_id": "minecraft:diamond",       "base_price": Decimal("5.76"), "ideal_supply": ideal_diamond},
     ]
     for d in defaults:
         existing = session.scalar(select(Material).where(Material.mc_id == d["mc_id"]))
@@ -55,9 +55,10 @@ def spot_price(material: Material, copper: Material) -> Decimal:
         return Decimal("0.01")
 
     if material.current_supply <= 0:
-        material_ratio = Decimal(str(material.ideal_supply))
+        material_ratio = PRICE_CAP_MULTIPLIER
     else:
-        material_ratio = Decimal(str(material.ideal_supply / material.current_supply))
+        raw_ratio = Decimal(str(material.ideal_supply / material.current_supply))
+        material_ratio = min(raw_ratio, PRICE_CAP_MULTIPLIER)
 
     if copper.current_supply <= 0:
         copper_ratio = Decimal("1")
@@ -79,6 +80,10 @@ def _integrated_value(material: Material, copper: Material, quantity: int, withd
     base = float(material.base_price)
     current = float(material.current_supply)
     n = float(quantity)
+    cap = float(PRICE_CAP_MULTIPLIER)
+
+    # Supply floor — prevents integration from exceeding price cap
+    supply_floor = ideal / (cap ** (1 / e))
 
     # Copper inflation multiplier — fixed for this transaction
     if copper.current_supply <= 0:
@@ -87,10 +92,10 @@ def _integrated_value(material: Material, copper: Material, quantity: int, withd
         copper_factor = (copper.current_supply / copper.ideal_supply) ** float(COPPER_INFLUENCE)
 
     if withdrawing:
-        q_start = max(current - n, 0.01)
-        q_end = current
+        q_start = max(current - n, supply_floor)
+        q_end = max(current, supply_floor)
     else:
-        q_start = max(current, 0.01)
+        q_start = max(current, supply_floor)
         q_end = current + n
 
     if abs(e - 1.0) < 1e-9:

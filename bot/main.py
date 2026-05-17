@@ -4,6 +4,7 @@ from discord import app_commands
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from dotenv import load_dotenv
 from app.database import SessionLocal
+from sqlalchemy import select, func
 
 from app.services.banking import (
     register_player,
@@ -13,7 +14,9 @@ from app.services.banking import (
     player_transfer,
     guild_deposit,
     guild_withdraw,
-    admin_change_player_bal
+    admin_change_player_bal,
+    update_username,
+    Account
 )
 
 from app.models.guild import GuildRole
@@ -53,7 +56,8 @@ from app.services.predictions import (
 from app.services.materials import (
     get_all_spot_prices,
     process_deposit,
-    process_withdrawal
+    process_withdrawal,
+    Material
 )
 
 load_dotenv()
@@ -64,6 +68,13 @@ ADMIN_IDS = [
     int(user_id.strip())
     for user_id in os.getenv("ADMIN_IDS", "").split(",")
     if user_id.strip()
+]
+material_choices = [
+    app_commands.Choice(name="Copper Nugget", value="minecraft:copper_nugget"),
+    app_commands.Choice(name="Zinc Nugget",   value="create:zinc_nugget"),
+    app_commands.Choice(name="Iron Nugget",   value="minecraft:iron_nugget"),
+    app_commands.Choice(name="Gold Nugget",   value="minecraft:gold_nugget"),
+    app_commands.Choice(name="Diamond",       value="minecraft:diamond"),
 ]
 
 intents = discord.Intents.default()
@@ -152,19 +163,34 @@ async def balance(interaction: discord.Interaction):
             else:
                 await interaction.followup.send(msg)
 
-@tree.command(name="profile", description="View your details")
-async def details(interaction: discord.Interaction):
+@tree.command(name="set_minecraft_name", description="Link your Minecraft username to your bank account")
+@app_commands.describe(username="Your Minecraft username")
+async def set_minecraft_name_cmd(interaction: discord.Interaction, username: str):
+    await interaction.response.defer()
+
+    with SessionLocal() as session:
+        try:
+            update_username(session, str(interaction.user.id), username.strip())
+            await interaction.followup.send(
+                f"Minecraft username set to **{username.strip()}**! "
+                f"It will now appear on your profile."
+            )
+        except ValueError as e:
+            await interaction.followup.send(str(e))
+
+@tree.command(name="details", description="View details of a player")
+@app_commands.describe(player="Player you want details about")
+async def details(interaction: discord.Interaction, player: discord.Member):
     """Returns a player's name, minecraft name, balance, guild, and guild role."""
     await interaction.response.defer()
 
     with SessionLocal() as session:
         try:
-            discord_id = str(interaction.user.id)
+            discord_id = str(player.id)
 
             p = get_player(session, discord_id)
             balance = get_player_bal(session, discord_id)
 
-            # Guild info optional, player may not be in one
             try:
                 role = get_member_role(session, discord_id)
                 guild = get_guild(session, discord_id)
@@ -174,31 +200,39 @@ async def details(interaction: discord.Interaction):
                 guild_name = None
                 guild_role = None
 
-            # Build title
-            name = interaction.user.display_name
-            if guild_role and guild_role != "member":
-                name = guild_role.capitalize() + " " + name
-            title = name + (f" ({p.mc_username})" if p.mc_username else "")
-
-            # Build embed
-            profile = f"# Balance: ${balance:,.2f}"
-            if guild_name:
-                profile += f"\n### Guild: {guild_name}"
-
-            embed = discord.Embed(
-                title=title,
-                description=profile,
-                color=discord.Color.blue(),
+        except ValueError:
+            await interaction.followup.send(
+                "That player has not registered for an account yet. They can use `/register` to sign up!"
             )
-            embed.set_thumbnail(url=interaction.user.display_avatar.url)
-            await interaction.followup.send(embed=embed)
+            return
 
-        except ValueError as e:
-            msg = str(e)
-            if "not registered" in msg:
-                await interaction.followup.send("You do not have an account! Use `/register` !")
-            else:
-                await interaction.followup.send(msg)
+    # Build title
+    name = player.display_name
+    if guild_role and guild_role != "member":
+        name = guild_role.capitalize() + " " + name
+    title = name + (f" ({p.mc_username})" if p.mc_username else "")
+
+    # Build embed
+    profile = f"# Balance: ${balance:,.2f}"
+    if guild_name:
+        profile += f"\n### Guild: {guild_name}"
+
+    embed = discord.Embed(
+        title=title,
+        description=profile,
+        color=discord.Color.blue(),
+    )
+
+    if p.mc_username:
+        # Minecraft skin as main image, Discord avatar as thumbnail
+        skin_url = f"https://mineskin.eu/armor/helm/{p.mc_username}/100.png"
+        embed.set_image(url=skin_url)
+        embed.set_thumbnail(url=player.display_avatar.url)
+    else:
+        # No Minecraft name — just Discord avatar as thumbnail
+        embed.set_thumbnail(url=player.display_avatar.url)
+
+    await interaction.followup.send(embed=embed)
 
 
 @tree.command(name="transfer", description="Transfer money to another player")
@@ -488,6 +522,8 @@ async def guild_deposit_cmd(interaction: discord.Interaction, amount: str):
                 await interaction.followup.send(f"Insufficient funds to deposit **${decimal_amount:,.2f}**.")
             elif "not registered" in msg:
                 await interaction.followup.send("You don't have a bank account yet. Use `/register` first!")
+            elif "already registered" in msg:
+                await interaction.followup.send("You already registered!")
             else:
                 await interaction.followup.send(msg)
 
@@ -869,7 +905,7 @@ async def zz_resolve_prediction(interaction: discord.Interaction, outcome: app_c
             elif won:
                 dm_embed = discord.Embed(
                     title="Prediction Resolved ✅",
-                    description=f"#{question}",
+                    description=f"{question}",
                     color=discord.Color.green()
                 )
                 dm_embed.add_field(name="Outcome", value=f"**{outcome.name}**", inline=False)
@@ -894,7 +930,7 @@ async def zz_resolve_prediction(interaction: discord.Interaction, outcome: app_c
                 total_bet = winning_bet + losing_bet
                 dm_embed = discord.Embed(
                     title="Prediction Resolved ❌",
-                    description=f"#{question}",
+                    description=f"{question}",
                     color=discord.Color.red()
                 )
                 dm_embed.add_field(name="Outcome", value=f"**{outcome.name}** — You lost", inline=False)
@@ -971,11 +1007,13 @@ async def exchange_rates_cmd(interaction: discord.Interaction):
             await interaction.followup.send(str(e))
             return
 
-    lines = ["**Copper Nugget** — $0.01 *(base currency)*"]
+    lines = ["**Copper Nugget** — $0.01"]
     for r in rates:
         if r["mc_id"] == "minecraft:copper_nugget":
             continue
-        lines.append(f"**{r['name']}** — ${r['spot_price']:,.2f}")
+        else:
+            factor = r["spot_price"] / Decimal("0.0100")
+            lines.append(f"**{r['name']}** — ${r['spot_price']:,.2f} ({factor:,.1f}x)")
 
     embed = discord.Embed(
         title="📊 Exchange Rates",
@@ -988,12 +1026,10 @@ async def exchange_rates_cmd(interaction: discord.Interaction):
 # Admin commands
 
 @tree.command(name="zz_sim_deposit", description="[ADMIN] Simulate a material deposit")
-@app_commands.describe(
-    material="Material mc_id (e.g. minecraft:diamond)",
-    quantity="Quantity to deposit"
-)
+@app_commands.describe(member="Player to deposit for", material="Material to deposit", quantity="Quantity to deposit")
+@app_commands.choices(material=material_choices)
 @app_commands.check(is_admin)
-async def zz_sim_deposit(interaction: discord.Interaction, material: str, quantity: int):
+async def zz_sim_deposit(interaction: discord.Interaction, member: discord.Member, material: app_commands.Choice[str], quantity: int):
     await interaction.response.defer()
 
     if quantity <= 0:
@@ -1004,8 +1040,8 @@ async def zz_sim_deposit(interaction: discord.Interaction, material: str, quanti
         try:
             result = process_deposit(
                 session,
-                str(interaction.user.id),
-                [{"mc_id": material.strip(), "quantity": quantity}]
+                str(member.id),
+                [{"mc_id": material.value, "quantity": quantity}]
             )
         except ValueError as e:
             await interaction.followup.send(str(e))
@@ -1014,6 +1050,7 @@ async def zz_sim_deposit(interaction: discord.Interaction, material: str, quanti
     b = result["breakdown"][0]
     embed = discord.Embed(
         title="🧪 Simulated Deposit",
+        description=f"Deposited on behalf of <@{member.id}>",
         color=discord.Color.green(),
     )
     embed.add_field(name="Material", value=b["material"], inline=True)
@@ -1026,12 +1063,10 @@ async def zz_sim_deposit(interaction: discord.Interaction, material: str, quanti
 
 
 @tree.command(name="zz_sim_withdrawal", description="[ADMIN] Simulate a material withdrawal")
-@app_commands.describe(
-    material="Material mc_id (e.g. minecraft:diamond)",
-    quantity="Quantity to withdraw"
-)
+@app_commands.describe(member="Player to withdraw for", material="Material to withdraw", quantity="Quantity to withdraw")
+@app_commands.choices(material=material_choices)
 @app_commands.check(is_admin)
-async def zz_sim_withdrawal(interaction: discord.Interaction, material: str, quantity: int):
+async def zz_sim_withdrawal(interaction: discord.Interaction, member: discord.Member, material: app_commands.Choice[str], quantity: int):
     await interaction.response.defer()
 
     if quantity <= 0:
@@ -1042,8 +1077,8 @@ async def zz_sim_withdrawal(interaction: discord.Interaction, material: str, qua
         try:
             result = process_withdrawal(
                 session,
-                str(interaction.user.id),
-                [{"mc_id": material.strip(), "quantity": quantity}]
+                str(member.id),
+                [{"mc_id": material.value, "quantity": quantity}]
             )
         except ValueError as e:
             await interaction.followup.send(str(e))
@@ -1052,6 +1087,7 @@ async def zz_sim_withdrawal(interaction: discord.Interaction, material: str, qua
     b = result["breakdown"][0]
     embed = discord.Embed(
         title="🧪 Simulated Withdrawal",
+        description=f"Withdrawn on behalf of <@{member.id}>",
         color=discord.Color.red(),
     )
     embed.add_field(name="Material", value=b["material"], inline=True)
@@ -1103,6 +1139,41 @@ async def zz_bank_supply(interaction: discord.Interaction, ephemeral: bool = Fal
     else:
         await interaction.followup.send("Check your DMs!", ephemeral=True)
         await interaction.user.send(embed=embed)
+
+@tree.command(name="zz_sync_copper_supply", description="[ADMIN] Sync copper vault supply to total money in economy")
+@app_commands.check(is_admin)
+async def zz_sync_copper_supply(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    with SessionLocal() as session:
+        try:
+            # Sum all account balances
+            total_money = session.scalar(
+                select(func.sum(Account.balance))
+            ) or Decimal("0")
+
+            # Convert dollars to copper nuggets (1 nugget = $0.01)
+            total_nuggets = int((total_money / Decimal("0.01")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+            copper = session.scalar(
+                select(Material).where(Material.mc_id == "minecraft:copper_nugget")
+            )
+            if not copper:
+                await interaction.followup.send("Copper not found in materials table.")
+                return
+
+            old_supply = copper.current_supply
+            copper.current_supply = total_nuggets
+            session.commit()
+
+            await interaction.followup.send(
+                f"Copper supply synced.\n"
+                f"Total money in economy: **${total_money:,.2f}**\n"
+                f"Old supply: **{old_supply:,}** nuggets\n"
+                f"New supply: **{total_nuggets:,}** nuggets"
+            )
+        except Exception as e:
+            await interaction.followup.send(str(e))
 
 # READY
 @client.event
