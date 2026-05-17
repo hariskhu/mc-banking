@@ -142,26 +142,42 @@ async def register(interaction: discord.Interaction):
 
 @tree.command(name="balance", description="View current balance")
 async def balance(interaction: discord.Interaction):
-    '''Return's a player's balance.'''
     await interaction.response.defer()
-    with SessionLocal() as session:
-        try:
+    try:
+        with SessionLocal() as session:
+            player = get_player(session, str(interaction.user.id))
             balance = get_player_bal(session, str(interaction.user.id))
-            avatar_url = interaction.user.display_avatar.url
-            embed = discord.Embed(
-                title=f"{interaction.user.display_name}'s Balance",
-                description=f"# ${balance:,.2f}",
-                color=discord.Color.green()
-            )
-            embed.set_thumbnail(url=avatar_url)
+            
+            # Use Minecraft username if available, otherwise Discord name
+            display_name = player.mc_username if player.mc_username else interaction.user.display_name
+            
+        embed = discord.Embed(
+            title=f"{display_name}'s Balance",
+            description=f"# ${balance:,.2f}",
+            color=discord.Color.green()
+        )
+        
+        # Thumbnail
+        if player.mc_username:
+            skin_url = f"https://mineskin.eu/helm/{player.mc_username}"
+            embed.set_thumbnail(url=skin_url)
 
-            await interaction.followup.send(embed=embed)
-        except ValueError as e:
-            msg = str(e)
-            if "No player account" in msg:
-                await interaction.followup.send("You do not have an account! Use `/register` !")
-            else:
-                await interaction.followup.send(msg)
+            # Footer
+            embed.set_footer(
+                text=interaction.user.display_name, 
+                icon_url=interaction.user.display_avatar.url  # usually better to use Discord avatar
+            )
+        else:
+            embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        
+        await interaction.followup.send(embed=embed)
+        
+    except ValueError as e:
+        msg = str(e)
+        if "No player account" in msg:
+            await interaction.followup.send("You do not have an account! Use `/register` !")
+        else:
+            await interaction.followup.send(msg)
 
 @tree.command(name="set_minecraft_name", description="Link your Minecraft username to your bank account")
 @app_commands.describe(username="Your Minecraft username")
@@ -176,7 +192,11 @@ async def set_minecraft_name_cmd(interaction: discord.Interaction, username: str
                 f"It will now appear on your profile."
             )
         except ValueError as e:
-            await interaction.followup.send(str(e))
+            msg = str(e)
+        if "not registered" in msg:
+            await interaction.followup.send("You don't have a bank account yet. Use `/register` first!")
+        else:
+            await interaction.followup.send(msg)
 
 @tree.command(name="profile", description="View a player's profile")
 @app_commands.describe(player="Player you want details about")

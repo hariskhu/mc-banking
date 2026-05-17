@@ -9,7 +9,11 @@ load_dotenv()
 class Base(DeclarativeBase):
     pass
 
-engine = create_engine(os.environ["DATABASE_URL"])
+engine = create_engine(
+    os.environ["DATABASE_URL"],
+    pool_pre_ping=True,
+    pool_recycle=3600
+)
 SessionLocal = sessionmaker(bind=engine)
 
 def init_db():

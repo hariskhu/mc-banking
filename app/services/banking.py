@@ -140,17 +140,25 @@ def player_transfer(
     if from_discord_id == to_discord_id:
         raise ValueError("Cannot transfer to yourself")
 
-    # Resolve IDs first without locking
     from_id = _get_player_id(session, from_discord_id)
     to_id = _get_player_id(session, to_discord_id)
 
-    # Lock in consistent order to prevent deadlocks
-    first_id, second_id = min(from_id, to_id), max(from_id, to_id)
-    first = session.scalar(select(Account).where(Account.id == first_id).with_for_update())
-    second = session.scalar(select(Account).where(Account.id == second_id).with_for_update())
+    # Lock in consistent order
+    first_id = min(from_id, to_id)
+    second_id = max(from_id, to_id)
 
-    src = first if first.id == from_id else second
-    dst = first if first.id == to_id else second
+    # Load both with locks
+    accounts = {
+        acc.id: acc
+        for acc in session.scalars(
+            select(Account)
+            .where(Account.id.in_([first_id, second_id]))
+            .with_for_update()
+        ).all()
+    }
+
+    src = accounts[from_id]
+    dst = accounts[to_id]
 
     if src.balance < amount:
         raise ValueError("Insufficient funds to transfer")
