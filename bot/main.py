@@ -224,12 +224,10 @@ async def details(interaction: discord.Interaction, player: discord.Member):
     )
 
     if p.mc_username:
-        # Minecraft skin as main image, Discord avatar as thumbnail
-        skin_url = f"https://mineskin.eu/armor/helm/{p.mc_username}/100.png"
-        embed.set_image(url=skin_url)
-        embed.set_thumbnail(url=player.display_avatar.url)
+        skin_url = f"https://mineskin.eu/helm/{p.mc_username}"
+        embed.set_thumbnail(url=skin_url)
+        embed.set_footer(text=player.display_name, icon_url=player.display_avatar.url)
     else:
-        # No Minecraft name — just Discord avatar as thumbnail
         embed.set_thumbnail(url=player.display_avatar.url)
 
     await interaction.followup.send(embed=embed)
