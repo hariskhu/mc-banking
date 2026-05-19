@@ -422,10 +422,7 @@ async def disband_guild_cmd(interaction: discord.Interaction):
 
     with SessionLocal() as session:
         try:
-            discord_id = str(interaction.user.id)
-            guild = get_guild(session, discord_id)
-            guild_name = guild.name
-            disband_guild(session, discord_id)
+            guild_name = disband_guild(session, str(interaction.user.id))
             await interaction.followup.send(f"**{guild_name}** has been disbanded.")
         except PermissionError:
             await interaction.followup.send("Only the captain can disband the guild.")

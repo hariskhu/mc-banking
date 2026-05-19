@@ -192,7 +192,8 @@ def transfer_captaincy(session: Session, captain_discord_id: str, new_captain_di
     session.commit()
 
 
-def disband_guild(session: Session, captain_discord_id: str):
+def disband_guild(session: Session, captain_discord_id: str) -> str:
+    """Returns the guild name so the caller can use it in messages."""
     captain_id = _get_player_id(session, captain_discord_id)
 
     membership = session.scalar(
@@ -202,6 +203,8 @@ def disband_guild(session: Session, captain_discord_id: str):
         raise PermissionError("Only the captain can disband the guild")
 
     guild_id = membership.guild_id
+    guild = session.get(Guild, guild_id)
+    guild_name = guild.name
 
     guild_account = session.scalar(
         select(Account).where(
@@ -212,14 +215,12 @@ def disband_guild(session: Session, captain_discord_id: str):
     if guild_account and guild_account.balance > 0:
         raise ValueError("Drain the guild account before disbanding")
 
-    guild = session.get(Guild, guild_id)
-
-    # Delete everything in dependency order
     session.execute(delete(GuildMember).where(GuildMember.guild_id == guild_id))
     if guild_account:
         session.delete(guild_account)
     session.delete(guild)
     session.commit()
+    return guild_name
 
 
 def set_member_role(session: Session, captain_discord_id: str, target_discord_id: str, new_role: GuildRole):
