@@ -1052,7 +1052,7 @@ async def exchange_rates_cmd(interaction: discord.Interaction):
 
     lines = ["**Copper Nugget** — $0.01"]
     for r in rates:
-        if r["mc_id"] == "minecraft:copper_nugget":
+        if r["mc_id"] == "create:copper_nugget":
             continue
         else:
             factor = r["spot_price"] / Decimal("0.0100")
