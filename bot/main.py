@@ -919,7 +919,7 @@ async def zz_resolve_prediction(interaction: discord.Interaction, outcome: app_c
         try:
             user = await interaction.client.fetch_user(int(discord_id))
             if user is None:
-                print(f"User {discord_id} not found, skipping")
+                logger.info(f"User {discord_id} not found, skipping")
                 continue
 
             winning_bet = result["winning_bet"]
@@ -985,14 +985,14 @@ async def zz_resolve_prediction(interaction: discord.Interaction, outcome: app_c
                 )
 
             await user.send(embed=dm_embed)
-            print(f"DM sent to {discord_id}")
+            logger.info(f"DM sent to {discord_id}")
 
         except discord.Forbidden:
-            print(f"Forbidden — {discord_id} has DMs closed")
+            logger.info(f"Forbidden — {discord_id} has DMs closed")
         except discord.NotFound:
-            print(f"NotFound — {discord_id} doesn't exist")
+            logger.info(f"NotFound — {discord_id} doesn't exist")
         except Exception as e:
-            print(f"Unexpected error DMing {discord_id}: {e}")
+            logger.info(f"Unexpected error DMing {discord_id}: {e}")
 
 
 @tree.command(name="zz_refund_prediction", description="[ADMIN] Refund all bets on the active prediction")
@@ -1220,6 +1220,6 @@ async def zz_sync_copper_supply(interaction: discord.Interaction):
 async def on_ready():
     tree.copy_global_to(guild=GUILD)
     await tree.sync(guild=GUILD)
-    print(f'Logged in as {client.user}')
+    logger.info(f'Logged in as {client.user}')
 
 client.run(DISCORD_TOKEN)
