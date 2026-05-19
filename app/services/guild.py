@@ -195,9 +195,7 @@ def transfer_captaincy(session: Session, captain_discord_id: str, new_captain_di
 
 def disband_guild(session: Session, captain_discord_id: str) -> str:
     """Returns the guild name so the caller can use it in messages."""
-    logger.info(f"disband_guild called for {captain_discord_id}")
     captain_id = _get_player_id(session, captain_discord_id)
-    logger.info(f"disband_guild got captain_id {captain_id}")
 
     membership = session.scalar(
         select(GuildMember).where(GuildMember.player_id == captain_id)
