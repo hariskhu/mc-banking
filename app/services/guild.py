@@ -195,7 +195,6 @@ def transfer_captaincy(session: Session, captain_discord_id: str, new_captain_di
 def disband_guild(session: Session, captain_discord_id: str) -> str:
     """Returns the guild name so the caller can use it in messages."""
     captain_id = _get_player_id(session, captain_discord_id)
-
     membership = session.scalar(
         select(GuildMember).where(GuildMember.player_id == captain_id)
     )
@@ -215,9 +214,15 @@ def disband_guild(session: Session, captain_discord_id: str) -> str:
     if guild_account and guild_account.balance > 0:
         raise ValueError("Drain the guild account before disbanding")
 
-    session.execute(delete(GuildMember).where(GuildMember.guild_id == guild_id))
+    members = session.scalars(
+        select(GuildMember).where(GuildMember.guild_id == guild_id)
+    ).all()
+    for m in members:
+        session.delete(m)
+
     if guild_account:
         session.delete(guild_account)
+
     session.delete(guild)
     session.commit()
     return guild_name
