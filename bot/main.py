@@ -73,7 +73,7 @@ ADMIN_IDS = [
 ]
 
 material_choices = [
-    app_commands.Choice(name="Copper Nugget", value="minecraft:copper_nugget"),
+    app_commands.Choice(name="Copper Nugget", value="create:copper_nugget"),
     app_commands.Choice(name="Zinc Nugget",   value="create:zinc_nugget"),
     app_commands.Choice(name="Iron Nugget",   value="minecraft:iron_nugget"),
     app_commands.Choice(name="Gold Nugget",   value="minecraft:gold_nugget"),
@@ -1196,7 +1196,7 @@ async def zz_sync_copper_supply(interaction: discord.Interaction):
             total_nuggets = int((total_money / Decimal("0.01")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
             copper = session.scalar(
-                select(Material).where(Material.mc_id == "minecraft:copper_nugget")
+                select(Material).where(Material.mc_id == "create:copper_nugget")
             )
             if not copper:
                 await interaction.followup.send("Copper not found in materials table.")
