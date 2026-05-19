@@ -1,9 +1,10 @@
 from decimal import Decimal
 from sqlalchemy.orm import Session
-from sqlalchemy import select, delete
+from sqlalchemy import select, update as sql_update
 from app.models.guild import Guild, GuildMember, GuildRole
 from app.models.account import Account, AccountType
 from app.models.player import Player
+from app.models.transaction import Transaction
 
 
 def _get_player_id(session: Session, discord_id: str) -> int:
@@ -194,7 +195,10 @@ def transfer_captaincy(session: Session, captain_discord_id: str, new_captain_di
 
 def disband_guild(session: Session, captain_discord_id: str) -> str:
     """Returns the guild name so the caller can use it in messages."""
+    logger.info(f"disband_guild called for {captain_discord_id}")
     captain_id = _get_player_id(session, captain_discord_id)
+    logger.info(f"disband_guild got captain_id {captain_id}")
+
     membership = session.scalar(
         select(GuildMember).where(GuildMember.player_id == captain_id)
     )
@@ -221,6 +225,17 @@ def disband_guild(session: Session, captain_discord_id: str) -> str:
         session.delete(m)
 
     if guild_account:
+        session.execute(
+            sql_update(Transaction)
+            .where(Transaction.from_account == guild_account.id)
+            .values(from_account=None)
+        )
+        session.execute(
+            sql_update(Transaction)
+            .where(Transaction.to_account == guild_account.id)
+            .values(to_account=None)
+        )
+        session.flush()
         session.delete(guild_account)
 
     session.delete(guild)
