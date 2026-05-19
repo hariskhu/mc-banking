@@ -438,6 +438,9 @@ async def disband_guild_cmd(interaction: discord.Interaction):
                 await interaction.followup.send("You don't have a bank account yet. Use `/register` first!")
             else:
                 await interaction.followup.send(msg)
+        except Exception as e:
+            logger.error(f"disband_guild unexpected error: {e}", exc_info=True)
+            await interaction.followup.send("Something went wrong, please try again.")
 
 
 @tree.command(name="set_role", description="Change a guild member's role (captain only)")
