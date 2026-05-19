@@ -20,8 +20,16 @@ def seed_materials(session: Session):
     ideal_gold = 27*64*9 # A chest of gold ingots
     ideal_diamond = 64*3 # Three stacks of diamonds
 
+    # Fix wrong copper nugget tag
+    wrong_copper = session.scalar(
+        select(Material).where(Material.mc_id == "create:copper_nugget")
+    )
+    if wrong_copper:
+        wrong_copper.mc_id = "create:copper_nugget"
+        session.commit()
+
     defaults = [
-        {"name": "Copper Nugget",  "mc_id": "minecraft:copper_nugget", "base_price": Decimal("0.01"),  "ideal_supply": ideal_copper},
+        {"name": "Copper Nugget",  "mc_id": "create:copper_nugget", "base_price": Decimal("0.01"),  "ideal_supply": ideal_copper},
         {"name": "Zinc Nugget",    "mc_id": "create:zinc_nugget",      "base_price": Decimal("0.06"),  "ideal_supply": ideal_zinc},
         {"name": "Iron Nugget",    "mc_id": "minecraft:iron_nugget",   "base_price": Decimal("0.08"),  "ideal_supply": ideal_iron},
         {"name": "Gold Nugget",    "mc_id": "minecraft:gold_nugget",   "base_price": Decimal("0.12"), "ideal_supply": ideal_gold},
@@ -43,7 +51,7 @@ def get_material(session: Session, mc_id: str) -> Material:
 
 
 def _get_copper(session: Session) -> Material:
-    copper = session.scalar(select(Material).where(Material.mc_id == "minecraft:copper_nugget"))
+    copper = session.scalar(select(Material).where(Material.mc_id == "create:copper_nugget"))
     if not copper:
         raise ValueError("Copper not found in materials table")
     return copper
@@ -51,14 +59,13 @@ def _get_copper(session: Session) -> Material:
 
 def spot_price(material: Material, copper: Material) -> Decimal:
     if material.mc_id == copper.mc_id:
-        # Copper nugget prices itself — always $0.01
         return Decimal("0.01")
 
-    if material.current_supply <= 0:
-        material_ratio = PRICE_CAP_MULTIPLIER
-    else:
-        raw_ratio = Decimal(str(material.ideal_supply / material.current_supply))
-        material_ratio = min(raw_ratio, PRICE_CAP_MULTIPLIER)
+    cap = PRICE_CAP_MULTIPLIER
+    supply_floor = Decimal(str(material.ideal_supply)) / (cap ** (Decimal("1") / material.elasticity))
+
+    effective_supply = max(Decimal(str(material.current_supply)), supply_floor)
+    material_ratio = Decimal(str(material.ideal_supply)) / effective_supply
 
     if copper.current_supply <= 0:
         copper_ratio = Decimal("1")
@@ -70,20 +77,12 @@ def spot_price(material: Material, copper: Material) -> Decimal:
 
 
 def _integrated_value(material: Material, copper: Material, quantity: int, withdrawing: bool) -> Decimal:
-    """
-    Integrates over material supply change but uses current copper ratio
-    as a fixed multiplier for the transaction — copper supply is treated
-    as constant during a single deposit/withdrawal.
-    """
     e = float(material.elasticity)
     ideal = float(material.ideal_supply)
     base = float(material.base_price)
     current = float(material.current_supply)
     n = float(quantity)
     cap = float(PRICE_CAP_MULTIPLIER)
-
-    # Supply floor — prevents integration from exceeding price cap
-    supply_floor = ideal / (cap ** (1 / e))
 
     # Copper inflation multiplier — fixed for this transaction
     if copper.current_supply <= 0:
@@ -92,11 +91,22 @@ def _integrated_value(material: Material, copper: Material, quantity: int, withd
         copper_factor = (copper.current_supply / copper.ideal_supply) ** float(COPPER_INFLUENCE)
 
     if withdrawing:
-        q_start = max(current - n, supply_floor)
-        q_end = max(current, supply_floor)
+        q_start = max(current - n, 1.0)
+        q_end = max(current, 1.0)
     else:
-        q_start = max(current, supply_floor)
+        q_start = max(current, 1.0)
         q_end = current + n
+
+    # Clamp prices to cap by clamping supply to the floor where price = cap
+    supply_floor = ideal / (cap ** (1 / e))
+    q_start = max(q_start, supply_floor)
+    q_end = max(q_end, supply_floor)
+
+    # If both ends are at the floor (zero supply depositing small amount)
+    # just use flat cap price * quantity
+    if q_start >= q_end:
+        value = base * cap * n
+        return Decimal(str(abs(value * copper_factor))).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
 
     if abs(e - 1.0) < 1e-9:
         value = base * (ideal ** e) * math.log(q_end / q_start)
@@ -127,7 +137,7 @@ def process_deposit(session: Session, discord_id: str, items: list[dict]) -> dic
     # Separate copper from other materials — copper deposits don't pay out,
     # they just increase supply and cause mild deflation for other materials
     copper = session.scalar(
-        select(Material).where(Material.mc_id == "minecraft:copper_nugget").with_for_update()
+        select(Material).where(Material.mc_id == "create:copper_nugget").with_for_update()
     )
 
     breakdown = []
@@ -147,7 +157,7 @@ def process_deposit(session: Session, discord_id: str, items: list[dict]) -> dic
         if not material:
             raise ValueError(f"Unknown material: {mc_id}")
 
-        if mc_id == "minecraft:copper_nugget":
+        if mc_id == "create:copper_nugget":
             # Copper deposits credit 1:1 and update supply
             value = Decimal("0.01") * quantity
             material.current_supply += quantity
@@ -180,7 +190,7 @@ def process_deposit(session: Session, discord_id: str, items: list[dict]) -> dic
 def process_withdrawal(session: Session, discord_id: str, items: list[dict]) -> dict:
     account = _get_player_account(session, discord_id)
     copper = session.scalar(
-        select(Material).where(Material.mc_id == "minecraft:copper_nugget").with_for_update()
+        select(Material).where(Material.mc_id == "create:copper_nugget").with_for_update()
     )
 
     costs = []
@@ -198,7 +208,7 @@ def process_withdrawal(session: Session, discord_id: str, items: list[dict]) -> 
         if material.current_supply < quantity:
             raise ValueError(f"Insufficient vault supply of {material.name}")
 
-        if mc_id == "minecraft:copper_nugget":
+        if mc_id == "create:copper_nugget":
             cost = Decimal("0.01") * quantity
         else:
             cost = _integrated_value(material, copper, quantity, withdrawing=True)

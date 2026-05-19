@@ -193,11 +193,14 @@ def transfer_captaincy(session: Session, captain_discord_id: str, new_captain_di
 
 
 def disband_guild(session: Session, captain_discord_id: str):
-    if not can_manage_members(session, captain_discord_id):
+    captain_id = _get_player_id(session, captain_discord_id)
+
+    membership = session.scalar(
+        select(GuildMember).where(GuildMember.player_id == captain_id)
+    )
+    if not membership or membership.role != GuildRole.captain:
         raise PermissionError("Only the captain can disband the guild")
 
-    captain_id = _get_player_id(session, captain_discord_id)
-    membership = _get_membership(session, captain_id)
     guild_id = membership.guild_id
 
     guild_account = session.scalar(
@@ -209,13 +212,13 @@ def disband_guild(session: Session, captain_discord_id: str):
     if guild_account and guild_account.balance > 0:
         raise ValueError("Drain the guild account before disbanding")
 
-    # Delete all members in one query instead of one-by-one
-    session.execute(delete(GuildMember).where(GuildMember.guild_id == guild_id))
+    guild = session.get(Guild, guild_id)
 
+    # Delete everything in dependency order
+    session.execute(delete(GuildMember).where(GuildMember.guild_id == guild_id))
     if guild_account:
         session.delete(guild_account)
-
-    session.delete(session.get(Guild, guild_id))
+    session.delete(guild)
     session.commit()
 
 
