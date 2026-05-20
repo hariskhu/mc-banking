@@ -71,6 +71,7 @@ logger = logging.getLogger(__name__)
 
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
 GUILD_ID      = int(os.environ["GUILD_ID"])
+MY_ID         = int(os.environ["MY_ID"])
 
 intents = discord.Intents.default()
 intents.members = True
@@ -104,7 +105,7 @@ async def on_interaction(interaction: discord.Interaction):
 
 
 def is_admin(interaction: discord.Interaction) -> bool:
-    if interaction.user.id not in ADMIN_IDS:
+    if interaction.user.id != MY_ID:
         raise app_commands.CheckFailure(
             "You are not authorized to use this command."
         )
