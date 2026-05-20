@@ -1,12 +1,12 @@
 import os
 import discord
 import logging
+import sys
 from discord import app_commands
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from dotenv import load_dotenv
 from app.database import SessionLocal
 from sqlalchemy import select, func
-
 from app.services.banking import (
     register_player,
     get_player,
@@ -17,14 +17,13 @@ from app.services.banking import (
     guild_withdraw,
     admin_change_player_bal,
     update_username,
-    Account
+    Account,
 )
-
 from app.models.guild import GuildRole
 from bot.cogs.ui.guild_views import (
     GuildJoinRequestView,
     TransferCaptaincyView,
-    GuildWithdrawRequestView
+    GuildWithdrawRequestView,
 )
 from app.services.guild import (
     get_guild,
@@ -40,9 +39,8 @@ from app.services.guild import (
     can_withdraw,
     remove_member,
     get_all_guilds,
-    get_guild_members
+    get_guild_members,
 )
-
 from app.services.predictions import (
     get_active_prediction,
     create_prediction,
@@ -53,24 +51,34 @@ from app.services.predictions import (
     refund_prediction,
     PredictionSide,
 )
-
 from app.services.materials import (
     get_all_spot_prices,
     process_deposit,
     process_withdrawal,
-    Material
+    Material,
 )
 
 load_dotenv()
 
+logging.basicConfig(
+    stream=sys.stdout,
+    level=logging.INFO,
+    format='[%(asctime)s] [%(levelname)-8s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    force=True,
+)
+logger = logging.getLogger(__name__)
 
-DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-GUILD = discord.Object(id=int(os.getenv('DISCORD_SERVER_ID')))
-ADMIN_IDS = [
-    int(user_id.strip())
-    for user_id in os.getenv("ADMIN_IDS", "").split(",")
-    if user_id.strip()
-]
+DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
+GUILD_ID      = int(os.environ["GUILD_ID"])
+
+intents = discord.Intents.default()
+intents.members = True
+intents.message_content = True
+
+client = discord.Client(intents=intents)
+tree   = app_commands.CommandTree(client)
+GUILD  = discord.Object(id=GUILD_ID)
 
 material_choices = [
     app_commands.Choice(name="Copper Nugget", value="create:copper_nugget"),
@@ -79,16 +87,6 @@ material_choices = [
     app_commands.Choice(name="Gold Nugget",   value="minecraft:gold_nugget"),
     app_commands.Choice(name="Diamond",       value="minecraft:diamond"),
 ]
-
-# Bot setup
-intents = discord.Intents.default()
-intents.members = True 
-client = discord.Client(intents=intents)
-tree = app_commands.CommandTree(client)
-
-# Logging
-discord.utils.setup_logging()
-logger = logging.getLogger(__name__)
 
 # Intercept interactions to log commands
 @client.event
@@ -1223,6 +1221,7 @@ async def zz_sync_copper_supply(interaction: discord.Interaction):
 async def on_ready():
     tree.copy_global_to(guild=GUILD)
     await tree.sync(guild=GUILD)
-    logger.info(f'Logged in as {client.user}')
+    logger.info(f"Logged in as {client.user}")
 
-client.run(DISCORD_TOKEN)
+async def start():
+    await client.start(DISCORD_TOKEN)
