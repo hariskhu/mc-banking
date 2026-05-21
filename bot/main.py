@@ -1062,15 +1062,24 @@ async def exchange_rates_cmd(interaction: discord.Interaction):
             await interaction.followup.send(str(e))
             return
 
-    lines = ["**Copper Nugget** — $0.01 *(base currency)*"]
-    for r in rates:
-        if r["mc_id"] == "create:copper_nugget":
-            continue
-        factor      = r["spot_price"] / Decimal("0.01")
-        supply_pct  = (r["current_supply"] / r["ideal_supply"] * 100) if r["ideal_supply"] > 0 else 0
+    copper = next((r for r in rates if r["mc_id"] == "create:copper_nugget"), None)
+    others = sorted(
+        [r for r in rates if r["mc_id"] != "create:copper_nugget"],
+        key=lambda r: r["spot_price"],
+        reverse=True,
+    )
+
+    lines = []
+    for r in others:
+        factor = r["spot_price"] / Decimal("0.01")
         lines.append(
             f"**{r['name']}** — ${r['spot_price']:,.2f} ({factor:,.1f}x) "
             f"| Supply: {r['current_supply']:,}"
+        )
+
+    if copper:
+        lines.append(
+            f"**Copper Nugget** — $0.01 *(base currency)* | Supply: {copper['current_supply']:,}"
         )
 
     embed = discord.Embed(
