@@ -1,4 +1,3 @@
--- bank_terminal.lua
 local TERMINAL_ID = -1                         -- set per terminal
 local TOKEN       = "your-token-here"          -- set per terminal
 local HOST        = "mc-bank.duckdns.org:8000"
@@ -10,6 +9,13 @@ local VALID_CURRENCIES = {
     ["minecraft:iron_nugget"]   = true, ["minecraft:iron_ingot"]   = true, ["minecraft:iron_block"]   = true,
     ["minecraft:gold_nugget"]   = true, ["minecraft:gold_ingot"]   = true, ["minecraft:gold_block"]   = true,
     ["minecraft:diamond"]       = true, ["minecraft:diamond_block"] = true,
+}
+local COMPRESS_FORMS = {
+    ["create:copper_nugget"]  = { ingot = "minecraft:copper_ingot", block = "minecraft:copper_block", per_ingot = 9, per_block = 81 },
+    ["create:zinc_nugget"]    = { ingot = "create:zinc_ingot",      block = "create:zinc_block",      per_ingot = 9, per_block = 81 },
+    ["minecraft:iron_nugget"] = { ingot = "minecraft:iron_ingot",   block = "minecraft:iron_block",   per_ingot = 9, per_block = 81 },
+    ["minecraft:gold_nugget"] = { ingot = "minecraft:gold_ingot",   block = "minecraft:gold_block",   per_ingot = 9, per_block = 81 },
+    ["minecraft:diamond"]     = { ingot = nil,                      block = "minecraft:diamond_block", per_ingot = 1, per_block = 9  },
 }
 
 -- ── Peripherals ───────────────────────────────────────────────────────────────
@@ -38,53 +44,129 @@ local NUGGET_CONVERSIONS = {
 }
 
 local function push_items_to_barrel(mc_id, quantity)
-    -- Get the barrel's peripheral name for pushing into
     local barrel_name = peripheral.getName(barrel)
+    local forms       = COMPRESS_FORMS[mc_id]
     local remaining   = quantity
-    local pushed      = 0
+    local pushed_nuggets = 0
 
-    -- Iterate vault slots and push matching items
-    for slot, item in pairs(vault.list()) do
-        if remaining <= 0 then break end
-        if item.name == mc_id then
-            local to_push  = math.min(item.count, remaining)
-            local actually = vault.pushItems(barrel_name, slot, to_push)
-            pushed         = pushed + actually
-            remaining      = remaining - actually
+    if not forms then
+        -- Unknown material, push as-is
+        for slot, item in pairs(vault.list()) do
+            if remaining <= 0 then break end
+            if item.name == mc_id then
+                local to_push  = math.min(item.count, remaining)
+                local actually = vault.pushItems(barrel_name, slot, to_push)
+                pushed_nuggets = pushed_nuggets + actually
+                remaining      = remaining - actually
+            end
+        end
+        return pushed_nuggets
+    end
+
+    -- Push blocks first
+    local blocks_needed = math.floor(remaining / forms.per_block)
+    if blocks_needed > 0 and forms.block then
+        for slot, item in pairs(vault.list()) do
+            if blocks_needed <= 0 then break end
+            if item.name == forms.block then
+                local to_push  = math.min(item.count, blocks_needed)
+                local actually = vault.pushItems(barrel_name, slot, to_push)
+                pushed_nuggets = pushed_nuggets + (actually * forms.per_block)
+                remaining      = remaining - (actually * forms.per_block)
+                blocks_needed  = blocks_needed - actually
+            end
         end
     end
 
-    return pushed
+    -- Push ingots next
+    if forms.ingot then
+        local ingots_needed = math.floor(remaining / forms.per_ingot)
+        if ingots_needed > 0 then
+            for slot, item in pairs(vault.list()) do
+                if ingots_needed <= 0 then break end
+                if item.name == forms.ingot then
+                    local to_push  = math.min(item.count, ingots_needed)
+                    local actually = vault.pushItems(barrel_name, slot, to_push)
+                    pushed_nuggets = pushed_nuggets + (actually * forms.per_ingot)
+                    remaining      = remaining - (actually * forms.per_ingot)
+                    ingots_needed  = ingots_needed - actually
+                end
+            end
+        end
+    end
+
+    -- Push remaining as nuggets/base units
+    if remaining > 0 then
+        for slot, item in pairs(vault.list()) do
+            if remaining <= 0 then break end
+            if item.name == mc_id then
+                local to_push  = math.min(item.count, remaining)
+                local actually = vault.pushItems(barrel_name, slot, to_push)
+                pushed_nuggets = pushed_nuggets + actually
+                remaining      = remaining - actually
+            end
+        end
+    end
+
+    return pushed_nuggets
 end
 
-local function pull_items_from_barrel()
-    local barrel_name = peripheral.getName(barrel)
-    local vault_name  = peripheral.getName(vault)
-    local total_pulled = 0
+local function slots_needed_for_withdrawal(mc_id, quantity)
+    local forms = COMPRESS_FORMS[mc_id]
+    if not forms then return math.ceil(quantity / 64) end
 
-    -- Safely scan the barrel contents
-    local barrel_content = barrel.list()
-    if not barrel_content then return 0 end
+    local remaining = quantity
+    local slots     = 0
 
-    for slot, item in pairs(barrel_content) do
-        -- Check if the item ID is explicitly present in our currency dictionary
-        if VALID_CURRENCIES[item.name] then
-            print(("Pulling: %dx %s"):format(item.count, item.name))
-            
-            -- Push the item straight into the vault
-            local actually = barrel.pushItems(vault_name, slot)
-            total_pulled = total_pulled + actually
-        else
-            print(("Skipping invalid item: %s"):format(item.name))
+    -- Blocks
+    if forms.block then
+        local blocks = math.floor(remaining / forms.per_block)
+        if blocks > 0 then
+            slots     = slots + math.ceil(blocks / 64)
+            remaining = remaining - (blocks * forms.per_block)
         end
     end
 
-    return total_pulled
+    -- Ingots
+    if forms.ingot and remaining > 0 then
+        local ingots = math.floor(remaining / forms.per_ingot)
+        if ingots > 0 then
+            slots     = slots + math.ceil(ingots / 64)
+            remaining = remaining - (ingots * forms.per_ingot)
+        end
+    end
+
+    -- Nuggets/base units
+    if remaining > 0 then
+        slots = slots + math.ceil(remaining / 64)
+    end
+
+    return slots
+end
+
+local function free_barrel_slots()
+    local used = 0
+    for slot, item in pairs(barrel.list()) do
+        used = used + 1
+    end
+    return 27 - used
 end
 
 local function dispense_items(items)
     local all_ok  = true
     local results = {}
+
+    -- Check barrel capacity before dispensing anything
+    local total_slots_needed = 0
+    for _, item in ipairs(items) do
+        total_slots_needed = total_slots_needed + slots_needed_for_withdrawal(item.mc_id, item.quantity)
+    end
+
+    local free_slots = free_barrel_slots()
+    if total_slots_needed > free_slots then
+        print(("Barrel too full: need %d slots, have %d"):format(total_slots_needed, free_slots))
+        return false, {}, "Barrel does not have enough space. Please clear it first."
+    end
 
     for _, item in ipairs(items) do
         local mc_id    = item.mc_id
@@ -102,7 +184,7 @@ local function dispense_items(items)
         end
     end
 
-    return all_ok, results
+    return all_ok, results, nil
 end
 
 -- ── Display helpers ───────────────────────────────────────────────────────────

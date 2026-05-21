@@ -167,5 +167,35 @@ async def handle_terminal_message(terminal_id: int, data: dict):
         msg = await channel.send(f"<@{discord_id}>", embed=embed, view=view)
         view.message = msg
 
+    elif msg_type == "dispense_failed":
+        discord_id = payload.get("discord_id")
+        reason     = payload.get("reason", "Terminal error")
+        logger.warning(f"Dispense failed at terminal {terminal_id} for {discord_id}: {reason}")
+
+        # Refund the most recent pending withdrawal for this player
+        with SessionLocal() as session:
+            withdrawal = session.scalar(
+                select(PendingWithdrawal)
+                .where(
+                    PendingWithdrawal.terminal_id == terminal_id,
+                    PendingWithdrawal.discord_id  == discord_id,
+                    PendingWithdrawal.status      == WithdrawalStatus.pending,
+                )
+                .order_by(PendingWithdrawal.created_at.desc())
+            )
+            if withdrawal:
+                from app.services.terminals import refund_pending_withdrawal
+                refund_pending_withdrawal(session, withdrawal.id)
+                logger.info(f"Auto-refunded withdrawal {withdrawal.id} due to dispense failure")
+
+        # Notify the player via Discord
+        import discord as discord_lib
+        channel = client.get_channel(conn.claim_channel_id) if conn.claim_channel_id else None
+        if channel:
+            await channel.send(
+                f"<@{discord_id}> Your withdrawal could not be completed — {reason}. "
+                f"Your funds have been refunded."
+            )
+
     else:
         logger.warning(f"Terminal {terminal_id} sent unknown message type: {msg_type}")

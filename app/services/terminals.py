@@ -240,10 +240,22 @@ async def request_withdrawal(
     if not manager.is_connected(terminal_id):
         raise ValueError("This terminal is not currently online")
 
-    # Deduct from balance first
+    # Check barrel capacity via the terminal connection
+    # We estimate slots needed on the backend as a sanity check
+    total_slots = 0
+    for item in items:
+        quantity = item["quantity"]
+        # Worst case: all nuggets, no compression possible
+        total_slots += math.ceil(quantity / 64)
+
+    if total_slots > 27:
+        raise ValueError(
+            f"Withdrawal is too large to fit in the terminal barrel. "
+            f"Try withdrawing in smaller amounts."
+        )
+
     process_withdrawal(session, discord_id, items)
 
-    # Record the pending withdrawal
     withdrawal = PendingWithdrawal(
         discord_id=discord_id,
         terminal_id=terminal_id,
@@ -253,7 +265,6 @@ async def request_withdrawal(
     session.add(withdrawal)
     session.commit()
 
-    # Push dispense message to terminal
     conn = manager.connections.get(terminal_id)
     conn.in_transaction = True
     await manager.send(terminal_id, {
@@ -345,3 +356,4 @@ def fail_stale_withdrawals(session: Session, older_than_minutes: int = 10) -> li
             logger.error(f"Failed to refund withdrawal {w.id}: {e}")
 
     return refunded
+
