@@ -189,7 +189,6 @@ async def handle_terminal_message(terminal_id: int, data: dict):
                 logger.info(f"Auto-refunded withdrawal {withdrawal.id} due to dispense failure")
 
         # Notify the player via Discord
-        import discord as discord_lib
         channel = client.get_channel(conn.claim_channel_id) if conn.claim_channel_id else None
         if channel:
             await channel.send(
