@@ -187,6 +187,27 @@ local function dispense_items(items)
     return all_ok, results, nil
 end
 
+local function pull_items_from_barrel()
+    local barrel_name = peripheral.getName(barrel)
+    local vault_name  = peripheral.getName(vault)
+    local total_pulled = 0
+
+    local barrel_content = barrel.list()
+    if not barrel_content then return 0 end
+
+    for slot, item in pairs(barrel_content) do
+        if VALID_CURRENCIES[item.name] then
+            print(("Pulling: %dx %s"):format(item.count, item.name))
+            local actually = barrel.pushItems(vault_name, slot)
+            total_pulled = total_pulled + actually
+        else
+            print(("Skipping invalid item: %s"):format(item.name))
+        end
+    end
+
+    return total_pulled
+end
+
 -- ── Display helpers ───────────────────────────────────────────────────────────
 local function clear_monitor()
     if not monitor then return end
@@ -378,27 +399,33 @@ local function handle_message(raw)
         alert()
         show_status("Dispensing...", "Please wait.", nil, colors.yellow)
 
-        local ok, results = dispense_items(p.items or {})
+        local ok, results, err = dispense_items(p.items or {})
+
+        if err then
+            -- Capacity check failed — notify backend so it can refund
+            send({
+                type    = "dispense_failed",
+                payload = {
+                    discord_id = p.discord_id,
+                    reason     = err,
+                }
+            })
+            show_status("Barrel full!", "Please clear", "the barrel.", colors.red)
+            sleep(5)
+            show_idle()
+            return
+        end
 
         if ok then
             send({
                 type    = "dispense_confirm",
-                payload = {
-                    discord_id = p.discord_id,
-                    items      = results,
-                }
+                payload = { discord_id = p.discord_id, items = results }
             })
             show_status("Collect your", "items from the", "barrel!", colors.lime)
         else
-            -- Partial dispense — still confirm with what was actually pushed
-            -- so the backend knows what happened
             send({
                 type    = "dispense_confirm",
-                payload = {
-                    discord_id = p.discord_id,
-                    items      = results,
-                    partial    = true,
-                }
+                payload = { discord_id = p.discord_id, items = results, partial = true }
             })
             show_status("Partial fill!", "Some items may", "be missing.", colors.orange)
         end
