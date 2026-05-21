@@ -1,17 +1,108 @@
 -- bank_terminal.lua
-local TERMINAL_ID = 1                          -- set per terminal
+local TERMINAL_ID = -1                         -- set per terminal
 local TOKEN       = "your-token-here"          -- set per terminal
 local HOST        = "mc-bank.duckdns.org:8000"
 local WS_URL      = ("ws://%s/ws/terminal/%d?token=%s"):format(HOST, TERMINAL_ID, TOKEN)
 local RECONNECT_DELAY = 30  -- seconds between reconnect attempts
+local VALID_CURRENCIES = {
+    ["create:copper_nugget"]    = true, ["minecraft:copper_ingot"] = true, ["minecraft:copper_block"] = true,
+    ["create:zinc_nugget"]      = true, ["create:zinc_ingot"]      = true, ["create:zinc_block"]      = true,
+    ["minecraft:iron_nugget"]   = true, ["minecraft:iron_ingot"]   = true, ["minecraft:iron_block"]   = true,
+    ["minecraft:gold_nugget"]   = true, ["minecraft:gold_ingot"]   = true, ["minecraft:gold_block"]   = true,
+    ["minecraft:diamond"]       = true, ["minecraft:diamond_block"] = true,
+}
 
 -- ── Peripherals ───────────────────────────────────────────────────────────────
 local barrel  = peripheral.find("minecraft:barrel")
+local vault = peripheral.find("create:item_vault")
 local monitor = peripheral.find("monitor")
 local speaker = peripheral.find("note_block") or peripheral.find("speaker")
+local deposit_pending = false
 
 if not barrel then
     error("No barrel found — check peripheral connections")
+end
+
+if not vault then
+    error("No Create vault found — check peripheral connections")
+end
+
+-- ── Item dispensing ───────────────────────────────────────────────────────────
+-- Maps mc_id to the nugget equivalent count for conversion
+local NUGGET_CONVERSIONS = {
+    ["create:copper_nugget"]    = { nugget = "create:copper_nugget",    per_ingot = 9, per_block = 81  },
+    ["create:zinc_nugget"]      = { nugget = "create:zinc_nugget",      per_ingot = 9, per_block = 81  },
+    ["minecraft:iron_nugget"]   = { nugget = "minecraft:iron_nugget",   per_ingot = 9, per_block = 81  },
+    ["minecraft:gold_nugget"]   = { nugget = "minecraft:gold_nugget",   per_ingot = 9, per_block = 81  },
+    ["minecraft:diamond"]       = { nugget = "minecraft:diamond",       per_ingot = 1, per_block = 9   },
+}
+
+local function push_items_to_barrel(mc_id, quantity)
+    -- Get the barrel's peripheral name for pushing into
+    local barrel_name = peripheral.getName(barrel)
+    local remaining   = quantity
+    local pushed      = 0
+
+    -- Iterate vault slots and push matching items
+    for slot, item in pairs(vault.list()) do
+        if remaining <= 0 then break end
+        if item.name == mc_id then
+            local to_push  = math.min(item.count, remaining)
+            local actually = vault.pushItems(barrel_name, slot, to_push)
+            pushed         = pushed + actually
+            remaining      = remaining - actually
+        end
+    end
+
+    return pushed
+end
+
+local function pull_items_from_barrel()
+    local barrel_name = peripheral.getName(barrel)
+    local vault_name  = peripheral.getName(vault)
+    local total_pulled = 0
+
+    -- Safely scan the barrel contents
+    local barrel_content = barrel.list()
+    if not barrel_content then return 0 end
+
+    for slot, item in pairs(barrel_content) do
+        -- Check if the item ID is explicitly present in our currency dictionary
+        if VALID_CURRENCIES[item.name] then
+            print(("Pulling: %dx %s"):format(item.count, item.name))
+            
+            -- Push the item straight into the vault
+            local actually = barrel.pushItems(vault_name, slot)
+            total_pulled = total_pulled + actually
+        else
+            print(("Skipping invalid item: %s"):format(item.name))
+        end
+    end
+
+    return total_pulled
+end
+
+local function dispense_items(items)
+    local all_ok  = true
+    local results = {}
+
+    for _, item in ipairs(items) do
+        local mc_id    = item.mc_id
+        local quantity = item.quantity
+        local pushed   = push_items_to_barrel(mc_id, quantity)
+
+        table.insert(results, {
+            mc_id    = mc_id,
+            quantity = pushed,
+        })
+
+        if pushed < quantity then
+            all_ok = false
+            print(("Warning: only dispensed %d of %d %s"):format(pushed, quantity, mc_id))
+        end
+    end
+
+    return all_ok, results
 end
 
 -- ── Display helpers ───────────────────────────────────────────────────────────
@@ -24,51 +115,65 @@ end
 
 local function write_monitor(text, color, x, y)
     if not monitor then return end
-    if x and y then monitor.setCursorPos(x, y) end
+    
+    local final_x = x or 1
+    local final_y = y or 1
+
+    -- If "center" is requested, calculate the exact starting coordinate
+    if x == "center" then
+        local w, h = monitor.getSize()
+        final_x = math.floor((w - #text) / 2) + 1
+    end
+
+    monitor.setCursorPos(final_x, final_y)
     monitor.setTextColor(color or colors.white)
     monitor.write(text)
 end
 
 local function show_idle()
     clear_monitor()
-    write_monitor("  BANK TERMINAL", colors.yellow, 1, 1)
-    write_monitor("────────────────", colors.gray, 1, 2)
-    write_monitor("  Place items   ", colors.white, 1, 4)
-    write_monitor("  in the barrel ", colors.white, 1, 5)
-    write_monitor("  then /deposit ", colors.white, 1, 6)
-    write_monitor("  in Discord.   ", colors.white, 1, 7)
-    write_monitor("────────────────", colors.gray, 1, 9)
-    write_monitor("  Status: READY ", colors.lime, 1, 10)
+    write_monitor("BANK TERMINAL",    colors.yellow, "center", 1)
+    write_monitor("ID: " .. tostring(TERMINAL_ID), colors.cyan, "center", 2)
+    write_monitor("----------------", colors.gray,   "center", 3)
+    write_monitor("Claim terminal",   colors.white,  "center", 5)
+    write_monitor("to deposit or",    colors.white,  "center", 6)
+    write_monitor("withdraw items.",  colors.white,  "center", 7)
+    write_monitor("/claim_terminal",  colors.aqua,   "center", 9)
+    write_monitor("----------------", colors.gray,   "center", 11)
+    write_monitor("Status: READY",    colors.lime,   "center", 12)
 end
 
 local function show_status(line1, line2, line3, status_color)
     clear_monitor()
-    write_monitor("  BANK TERMINAL", colors.yellow, 1, 1)
-    write_monitor("────────────────", colors.gray, 1, 2)
-    if line1 then write_monitor("  " .. line1, colors.white, 1, 4) end
-    if line2 then write_monitor("  " .. line2, colors.white, 1, 5) end
-    if line3 then write_monitor("  " .. line3, colors.white, 1, 6) end
-    write_monitor("────────────────", colors.gray, 1, 9)
-    write_monitor("  " .. (status_color == colors.red and "ERROR" or "OK") .. "            ", status_color or colors.lime, 1, 10)
+    write_monitor("BANK TERMINAL",    colors.yellow, "center", 1)
+    write_monitor("================", colors.gray,   "center", 2)
+    if line1 then write_monitor(line1, colors.white, "center", 4) end
+    if line2 then write_monitor(line2, colors.white, "center", 5) end
+    if line3 then write_monitor(line3, colors.white, "center", 6) end
+    write_monitor("================", colors.gray,   "center", 9)
+    local status_text = (status_color == colors.red and "ERROR" or "OK")
+    write_monitor(status_text, status_color or colors.lime, "center", 10)
 end
 
 local function show_connecting()
     clear_monitor()
-    write_monitor("  BANK TERMINAL", colors.yellow, 1, 1)
-    write_monitor("────────────────", colors.gray, 1, 2)
-    write_monitor("  Connecting... ", colors.orange, 1, 4)
+    write_monitor("BANK TERMINAL",    colors.yellow, "center", 1)
+    write_monitor("----------------", colors.gray,   "center", 2)
+    write_monitor("Connecting...",    colors.orange, "center", 4)
+    write_monitor("Please wait.",     colors.white,  "center", 5)
 end
 
 local function show_claimed(name)
     clear_monitor()
-    write_monitor("  BANK TERMINAL", colors.yellow, 1, 1)
-    write_monitor("────────────────", colors.gray, 1, 2)
-    write_monitor("  Claimed by:   ", colors.white, 1, 4)
-    write_monitor("  " .. name,       colors.cyan,  1, 5)
-    write_monitor("  Place items   ", colors.white, 1, 7)
-    write_monitor("  in barrel &   ", colors.white, 1, 8)
-    write_monitor("  confirm in    ", colors.white, 1, 9)
-    write_monitor("  Discord.      ", colors.white, 1, 10)
+    write_monitor("BANK TERMINAL",    colors.yellow, "center", 1)
+    write_monitor("----------------", colors.gray,   "center", 2)
+    write_monitor("Claimed by:",      colors.white,  "center", 4)
+    write_monitor(name,               colors.cyan,   "center", 5)
+    write_monitor("----------------", colors.gray,   "center", 6)
+    write_monitor("Deposit: place",   colors.white,  "center", 8)
+    write_monitor("items in barrel.", colors.white,  "center", 9)
+    write_monitor("Withdraw: use",    colors.white,  "center", 11)
+    write_monitor("/withdraw",        colors.aqua,   "center", 12)
 end
 
 -- ── Alert sound ───────────────────────────────────────────────────────────────
@@ -163,10 +268,17 @@ local function handle_message(raw)
         show_idle()
 
     elseif t == "deposit_accepted" then
+        deposit_pending = false
         alert()
+        show_status("Processing...", "Moving items", "to vault.", colors.yellow)
+        
+        -- PHYSICALLY MOVE THE ITEMS NOW
+        local items_moved = pull_items_from_barrel()
+        print("Vault pulled " .. items_moved .. " items from deposit barrel.")
+        local total_str = ("%.2f"):format(p.total)
         show_status(
             "Deposit accepted!",
-            "$" .. tostring(p.total),
+            "$" .. total_str,
             "credited to account.",
             colors.lime
         )
@@ -174,6 +286,7 @@ local function handle_message(raw)
         show_idle()
 
     elseif t == "deposit_rejected" then
+        deposit_pending = false
         alert()
         show_status("Deposit rejected.", p.reason or "", nil, colors.red)
         sleep(5)
@@ -183,23 +296,31 @@ local function handle_message(raw)
         alert()
         show_status("Dispensing...", "Please wait.", nil, colors.yellow)
 
-        -- Push items from vault into barrel
-        -- The Create vault is on the back, barrel on the front
-        -- We use a turtle or the vault peripheral to move items
-        -- For now signal the vault via redstone and confirm
-        -- (actual item movement logic depends on your Create setup)
+        local ok, results = dispense_items(p.items or {})
 
-        -- TODO: implement item movement from vault to barrel
-        -- Once items are in barrel, send confirmation
-        send({
-            type = "dispense_confirm",
-            payload = {
-                discord_id = p.discord_id,
-                items      = p.items,
-            }
-        })
+        if ok then
+            send({
+                type    = "dispense_confirm",
+                payload = {
+                    discord_id = p.discord_id,
+                    items      = results,
+                }
+            })
+            show_status("Collect your", "items from the", "barrel!", colors.lime)
+        else
+            -- Partial dispense — still confirm with what was actually pushed
+            -- so the backend knows what happened
+            send({
+                type    = "dispense_confirm",
+                payload = {
+                    discord_id = p.discord_id,
+                    items      = results,
+                    partial    = true,
+                }
+            })
+            show_status("Partial fill!", "Some items may", "be missing.", colors.orange)
+        end
 
-        show_status("Collect your", "items from the", "barrel!", colors.lime)
         sleep(10)
         show_idle()
 
@@ -267,22 +388,22 @@ local last_item_count = 0
 local function barrel_watch_loop()
     while true do
         sleep(1)
-        if claimed_discord_id then
-            local items     = count_nuggets(barrel)
-            local filtered  = filter_items(items)
-            local total     = 0
+        if claimed_discord_id and not deposit_pending then
+            local items    = count_nuggets(barrel)
+            local filtered = filter_items(items)
+            local total    = 0
             for _, e in ipairs(filtered) do total = total + e.quantity end
 
             if total > 0 and total ~= last_item_count then
                 last_item_count = total
-                -- Debounce — wait a moment in case player is still depositing
-                sleep(2)
+                sleep(5)
                 items    = count_nuggets(barrel)
                 filtered = filter_items(items)
                 total    = 0
                 for _, e in ipairs(filtered) do total = total + e.quantity end
 
-                if total > 0 then
+                if total > 0 and not deposit_pending then
+                    deposit_pending = true
                     send({
                         type    = "deposit_ready",
                         payload = {
@@ -342,6 +463,7 @@ local function main()
         ws = nil
         claimed_discord_id = nil
         last_item_count    = 0
+        deposit_pending    = false
         show_connecting()
         print("Reconnecting in " .. RECONNECT_DELAY .. " seconds...")
         sleep(RECONNECT_DELAY)

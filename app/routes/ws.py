@@ -6,8 +6,13 @@ from app.models.terminal import Terminal
 from app.models.pending_withdrawal import PendingWithdrawal, WithdrawalStatus
 from app.ws.manager import manager
 from datetime import datetime, timezone
+from bot.main import client
+from bot.cogs.ui.terminal_views import DepositConfirmView
+from app.services.materials import _get_copper, _integrated_value, get_material
+from decimal import Decimal, ROUND_HALF_UP
 import json
 import logging
+import discord as discord_lib
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -85,31 +90,82 @@ async def handle_terminal_message(terminal_id: int, data: dict):
         discord_id = payload.get("discord_id")
         items      = payload.get("items", [])
 
+        claimant = manager.get_claimant(terminal_id)
+        if claimant != discord_id:
+            await manager.send(terminal_id, {
+                "type": "deposit_rejected",
+                "payload": {"reason": "Terminal not claimed by this player or claim expired."}
+            })
+            return
+
+        await manager.send(terminal_id, {"type": "deposit_ready_ack", "payload": {}})
+
+        channel = client.get_channel(conn.claim_channel_id)
+        if not channel:
+            await manager.send(terminal_id, {
+                "type": "deposit_rejected",
+                "payload": {"reason": "Could not find Discord channel. Please try again."}
+            })
+            return
+
         with SessionLocal() as session:
-            from app.services.materials import process_deposit
             try:
-                result = process_deposit(session, discord_id, items)
-                await manager.send(terminal_id, {
-                    "type": "deposit_accepted",
-                    "payload": {
-                        "total": str(result["total"]),
-                        "breakdown": [
-                            {
-                                "material": b["material"],
-                                "quantity": b["quantity"],
-                                "value":    str(b["value"]),
-                            }
-                            for b in result["breakdown"]
-                        ],
-                    },
-                })
-                logger.info(f"Deposit accepted for {discord_id} at terminal {terminal_id}")
+                copper    = _get_copper(session)
+                breakdown = []
+                total     = Decimal("0")
+
+                for item in items:
+                    mc_id    = item["mc_id"]
+                    quantity = int(item["quantity"])
+                    if quantity <= 0:
+                        continue
+
+                    if mc_id == "create:copper_nugget":
+                        value = Decimal("0.01") * quantity
+                        name  = "Copper Nugget"
+                    else:
+                        material = get_material(session, mc_id)
+                        value    = _integrated_value(material, copper, quantity, withdrawing=False)
+                        value    = value.quantize(Decimal("0.01"), ROUND_HALF_UP)
+                        name     = material.name
+
+                    total += value
+                    breakdown.append({
+                        "material": name,
+                        "quantity": quantity,
+                        "value":    value,
+                    })
+
+                total = total.quantize(Decimal("0.01"), ROUND_HALF_UP)
+
             except Exception as e:
                 await manager.send(terminal_id, {
                     "type": "deposit_rejected",
-                    "payload": {"reason": str(e)},
+                    "payload": {"reason": str(e)}
                 })
-                logger.warning(f"Deposit rejected for {discord_id}: {e}")
+                logger.warning(f"Deposit preview failed for {discord_id}: {e}")
+                return
+
+        lines = [
+            f"**{b['material']}** x{b['quantity']:,} — **${b['value']:,.2f}**"
+            for b in breakdown
+        ]
+        embed = discord_lib.Embed(
+            title="💰 Deposit Confirmation",
+            description="\n".join(lines),
+            color=discord_lib.Color.green(),
+        )
+        embed.add_field(name="Total", value=f"**${total:,.2f}**", inline=False)
+        embed.set_footer(text="You have 60 seconds to confirm.")
+
+        view = DepositConfirmView(
+            discord_id=discord_id,
+            terminal_id=terminal_id,
+            items=items,
+            total=total,
+        )
+        msg = await channel.send(f"<@{discord_id}>", embed=embed, view=view)
+        view.message = msg
 
     else:
         logger.warning(f"Terminal {terminal_id} sent unknown message type: {msg_type}")

@@ -7,6 +7,8 @@ from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from dotenv import load_dotenv
 from app.database import SessionLocal
 from sqlalchemy import select, func
+from app.ws.manager import manager
+from app.models.terminal import TerminalType
 from app.services.banking import (
     register_player,
     get_player,
@@ -20,11 +22,6 @@ from app.services.banking import (
     Account,
 )
 from app.models.guild import GuildRole
-from bot.cogs.ui.guild_views import (
-    GuildJoinRequestView,
-    TransferCaptaincyView,
-    GuildWithdrawRequestView,
-)
 from app.services.guild import (
     get_guild,
     get_member_role,
@@ -57,6 +54,22 @@ from app.services.materials import (
     process_withdrawal,
     Material,
 )
+from bot.cogs.ui.guild_views import (
+    GuildJoinRequestView,
+    TransferCaptaincyView,
+    GuildWithdrawRequestView,
+)
+from app.services.terminals import (
+    create_terminal,
+    regenerate_token,
+    set_terminal_active,
+    get_all_terminals,
+    get_pending_withdrawals,
+    refund_pending_withdrawal,
+    fail_stale_withdrawals,
+)
+from app.models.pending_withdrawal import PendingWithdrawal, WithdrawalStatus
+from bot.cogs.ui.terminal_views import DepositConfirmView, WithdrawalConfirmView
 
 load_dotenv()
 
@@ -1049,13 +1062,16 @@ async def exchange_rates_cmd(interaction: discord.Interaction):
             await interaction.followup.send(str(e))
             return
 
-    lines = ["**Copper Nugget** — $0.01"]
+    lines = ["**Copper Nugget** — $0.01 *(base currency)*"]
     for r in rates:
         if r["mc_id"] == "create:copper_nugget":
             continue
-        else:
-            factor = r["spot_price"] / Decimal("0.0100")
-            lines.append(f"**{r['name']}** — ${r['spot_price']:,.2f} ({factor:,.1f}x)")
+        factor      = r["spot_price"] / Decimal("0.01")
+        supply_pct  = (r["current_supply"] / r["ideal_supply"] * 100) if r["ideal_supply"] > 0 else 0
+        lines.append(
+            f"**{r['name']}** — ${r['spot_price']:,.2f} ({factor:,.1f}x) "
+            f"| Supply: {r['current_supply']:,}"
+        )
 
     embed = discord.Embed(
         title="📊 Exchange Rates",
@@ -1216,6 +1232,364 @@ async def zz_sync_copper_supply(interaction: discord.Interaction):
             )
         except Exception as e:
             await interaction.followup.send(str(e))
+
+@tree.command(name="claim_terminal", description="Claim a bank terminal to make a deposit")
+@app_commands.describe(terminal_id="ID of the bank terminal")
+async def claim_terminal_cmd(interaction: discord.Interaction, terminal_id: int):
+    await interaction.response.defer()
+
+    discord_id = str(interaction.user.id)
+
+    with SessionLocal() as session:
+        from app.services.terminals import _get_terminal
+        from app.models.terminal import TerminalType
+        try:
+            terminal = _get_terminal(session, terminal_id)
+            if terminal.type != TerminalType.bank:
+                await interaction.followup.send("That is not a bank terminal.")
+                return
+            if not terminal.active:
+                await interaction.followup.send("That terminal is currently inactive.")
+                return
+        except ValueError as e:
+            await interaction.followup.send(str(e))
+            return
+
+    if not manager.is_connected(terminal_id):
+        await interaction.followup.send("That terminal is not currently online.")
+        return
+
+    claimed = manager.claim(terminal_id, discord_id, interaction.channel_id)
+    if not claimed:
+        claimant = manager.get_claimant(terminal_id)
+        await interaction.followup.send(
+            f"This terminal is currently claimed by <@{claimant}>. Try again in a moment."
+        )
+        return
+
+    # Send claim_active to terminal with display name and discord_id
+    p = interaction.user
+    display = p.nick if hasattr(p, 'nick') and p.nick else p.display_name
+    with SessionLocal() as session:
+        from app.services.banking import get_player
+        try:
+            player = get_player(session, discord_id)
+            mc_name = player.mc_username
+        except ValueError:
+            mc_name = None
+
+    await manager.send(terminal_id, {
+        "type": "claim_active",
+        "payload": {
+            "discord_id":   discord_id,
+            "display_name": mc_name or display,
+        }
+    })
+
+    embed = discord.Embed(
+        title="🏦 Terminal Claimed",
+        description=(
+            f"You have claimed **Terminal #{terminal_id}**.\n\n"
+            f"Place your items in the barrel, then wait for the confirmation prompt.\n"
+            f"Your claim expires in **2 minutes**."
+        ),
+        color=discord.Color.blue(),
+    )
+    embed.set_footer(text="Use /release_claim if you change your mind.")
+    await interaction.followup.send(embed=embed)
+
+
+@tree.command(name="release_claim", description="Release your claim on a bank terminal")
+@app_commands.describe(terminal_id="ID of the bank terminal")
+async def release_claim_cmd(interaction: discord.Interaction, terminal_id: int):
+    await interaction.response.defer()
+
+    discord_id = str(interaction.user.id)
+    claimant   = manager.get_claimant(terminal_id)
+
+    if claimant != discord_id:
+        await interaction.followup.send("You don't have an active claim on this terminal.")
+        return
+
+    manager.release_claim(terminal_id, discord_id)
+    await manager.send(terminal_id, {"type": "claim_released", "payload": {}})
+    await interaction.followup.send("Your claim has been released.")
+
+
+@tree.command(name="withdraw", description="Withdraw materials from the bank terminal")
+@app_commands.describe(terminal_id="ID of the bank terminal to withdraw from")
+@app_commands.choices(material=material_choices)
+async def withdraw_cmd(
+    interaction: discord.Interaction,
+    terminal_id: int,
+    material: app_commands.Choice[str],
+    quantity: int,
+):
+    await interaction.response.defer()
+
+    if quantity <= 0:
+        await interaction.followup.send("Quantity must be positive.")
+        return
+
+    discord_id = str(interaction.user.id)
+
+    if not manager.is_connected(terminal_id):
+        await interaction.followup.send("That terminal is not currently online.")
+        return
+    
+    claimant = manager.get_claimant(terminal_id)
+    if claimant != discord_id:
+        await interaction.followup.send(
+            "You must claim this terminal first with `/claim_terminal` before withdrawing."
+        )
+        return
+
+    with SessionLocal() as session:
+        from app.services.materials import _get_copper, _integrated_value, get_material
+        from decimal import Decimal, ROUND_HALF_UP
+        try:
+            mc_id  = material.value
+            copper = _get_copper(session)
+
+            if mc_id == "create:copper_nugget":
+                cost = Decimal("0.01") * quantity
+            else:
+                mat = get_material(session, mc_id)
+                if mat.current_supply < quantity:
+                    await interaction.followup.send(
+                        f"Insufficient vault supply of **{mat.name}** "
+                        f"(have {mat.current_supply:,}, need {quantity:,})."
+                    )
+                    return
+                cost = _integrated_value(mat, copper, quantity, withdrawing=True)
+                cost = cost.quantize(Decimal("0.01"), ROUND_HALF_UP)
+
+            bal = get_player_bal(session, discord_id)
+            if bal < cost:
+                await interaction.followup.send(
+                    f"Insufficient funds. Withdrawal costs **${cost:,.2f}**, "
+                    f"your balance is **${bal:,.2f}**."
+                )
+                return
+
+        except ValueError as e:
+            await interaction.followup.send(str(e))
+            return
+
+    embed = discord.Embed(
+        title="💸 Withdrawal Confirmation",
+        color=discord.Color.orange(),
+    )
+    embed.add_field(name="Material", value=material.name,      inline=True)
+    embed.add_field(name="Quantity", value=f"{quantity:,}",     inline=True)
+    embed.add_field(name="Cost",     value=f"**${cost:,.2f}**", inline=True)
+    embed.add_field(name="Terminal", value=f"#{terminal_id}",   inline=True)
+    embed.set_footer(text="You have 60 seconds to confirm. Collect items from the terminal barrel.")
+
+    view = WithdrawalConfirmView(
+        discord_id=discord_id,
+        terminal_id=terminal_id,
+        items=[{"mc_id": material.value, "quantity": quantity}],
+        total_cost=cost,
+        timeout=60,
+    )
+    msg = await interaction.followup.send(embed=embed, view=view)
+    view.message = msg
+
+
+# Admin commands
+@tree.command(name="zz_pending_withdrawals", description="[ADMIN] View all pending withdrawals")
+@app_commands.check(is_admin)
+async def zz_pending_withdrawals(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    with SessionLocal() as session:
+        withdrawals = get_pending_withdrawals(session)
+
+    if not withdrawals:
+        await interaction.followup.send("No pending withdrawals.", ephemeral=True)
+        return
+
+    lines = [
+        f"**#{w.id}** — <@{w.discord_id}> — Terminal {w.terminal_id} — "
+        f"{w.items} — {w.created_at.strftime('%H:%M:%S UTC')}"
+        for w in withdrawals
+    ]
+
+    embed = discord.Embed(
+        title="⏳ Pending Withdrawals",
+        description="\n".join(lines),
+        color=discord.Color.orange(),
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@tree.command(name="zz_refund_withdrawal", description="[ADMIN] Refund a specific pending withdrawal")
+@app_commands.describe(withdrawal_id="ID of the pending withdrawal to refund")
+@app_commands.check(is_admin)
+async def zz_refund_withdrawal(interaction: discord.Interaction, withdrawal_id: int):
+    await interaction.response.defer()
+
+    with SessionLocal() as session:
+        try:
+            withdrawal = refund_pending_withdrawal(session, withdrawal_id)
+            await interaction.followup.send(
+                f"Withdrawal **#{withdrawal_id}** refunded to <@{withdrawal.discord_id}>."
+            )
+            try:
+                user = await interaction.client.fetch_user(int(withdrawal.discord_id))
+                if user:
+                    await user.send(
+                        f"Your withdrawal request **#{withdrawal_id}** could not be completed "
+                        f"and has been refunded to your account."
+                    )
+            except discord.Forbidden:
+                pass
+        except ValueError as e:
+            await interaction.followup.send(str(e))
+
+
+@tree.command(name="zz_refund_stale_withdrawals", description="[ADMIN] Refund all withdrawals pending over 10 minutes")
+@app_commands.check(is_admin)
+async def zz_refund_stale_withdrawals(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    with SessionLocal() as session:
+        refunded = fail_stale_withdrawals(session)
+
+    if not refunded:
+        await interaction.followup.send("No stale withdrawals to refund.")
+        return
+
+    await interaction.followup.send(
+        f"Refunded **{len(refunded)}** stale withdrawal{'s' if len(refunded) != 1 else ''}."
+    )
+    for w in refunded:
+        try:
+            user = await interaction.client.fetch_user(int(w.discord_id))
+            if user:
+                await user.send(
+                    f"Your withdrawal request **#{w.id}** timed out and has been refunded."
+                )
+        except discord.Forbidden:
+            pass
+
+
+@tree.command(name="zz_create_terminal", description="[ADMIN] Create a new terminal")
+@app_commands.describe(
+    name="Terminal name",
+    type="Terminal type",
+    location="Optional location description",
+)
+@app_commands.choices(type=[
+    app_commands.Choice(name="Bank",    value="bank"),
+    app_commands.Choice(name="Shop",    value="shop"),
+    app_commands.Choice(name="Buyback", value="buyback"),
+    app_commands.Choice(name="Service", value="service"),
+])
+@app_commands.check(is_admin)
+async def zz_create_terminal(
+    interaction: discord.Interaction,
+    name: str,
+    type: app_commands.Choice[str],
+    location: str = None,
+):
+    await interaction.response.defer(ephemeral=True)
+
+    with SessionLocal() as session:
+        try:
+            terminal = create_terminal(
+                session,
+                name=name.strip(),
+                type=TerminalType[type.value],
+                location=location,
+            )
+            await interaction.followup.send(
+                f"Terminal **{terminal.name}** created with ID **{terminal.id}**.\n"
+                f"Token will be DMed to you.",
+                ephemeral=True,
+            )
+            await interaction.user.send(
+                f"**Terminal created:** {terminal.name} (ID: {terminal.id})\n"
+                f"**Type:** {terminal.type.value}\n"
+                f"**Token:** `{terminal.token}`\n"
+                f"Keep this token secret — it authenticates the CC computer."
+            )
+        except ValueError as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+
+
+@tree.command(name="zz_regenerate_token", description="[ADMIN] Regenerate a terminal's token")
+@app_commands.describe(terminal_id="ID of the terminal")
+@app_commands.check(is_admin)
+async def zz_regenerate_token(interaction: discord.Interaction, terminal_id: int):
+    await interaction.response.defer(ephemeral=True)
+
+    with SessionLocal() as session:
+        try:
+            terminal = regenerate_token(session, terminal_id)
+            # Disconnect live connection after current transaction
+            await manager.disconnect_after_transaction(terminal_id)
+            await interaction.followup.send(
+                f"Token regenerated for **{terminal.name}**. New token DMed to you.",
+                ephemeral=True,
+            )
+            await interaction.user.send(
+                f"**Token regenerated for:** {terminal.name} (ID: {terminal_id})\n"
+                f"**New token:** `{terminal.token}`\n"
+                f"Update the CC script with this token before reconnecting."
+            )
+        except ValueError as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+
+
+@tree.command(name="zz_toggle_terminal", description="[ADMIN] Enable or disable a terminal")
+@app_commands.describe(terminal_id="ID of the terminal", active="True to enable, False to disable")
+@app_commands.check(is_admin)
+async def zz_toggle_terminal(interaction: discord.Interaction, terminal_id: int, active: bool):
+    await interaction.response.defer(ephemeral=True)
+
+    with SessionLocal() as session:
+        try:
+            terminal = set_terminal_active(session, terminal_id, active)
+            status = "enabled" if active else "disabled"
+            await interaction.followup.send(
+                f"Terminal **{terminal.name}** has been {status}.",
+                ephemeral=True,
+            )
+        except ValueError as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+
+
+@tree.command(name="zz_terminals", description="[ADMIN] View all terminals and their status")
+@app_commands.check(is_admin)
+async def zz_terminals(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    with SessionLocal() as session:
+        terminals = get_all_terminals(session)
+
+    if not terminals:
+        await interaction.followup.send("No terminals exist yet.", ephemeral=True)
+        return
+
+    status_emoji = {True: "🟢", False: "🔴"}
+    connected_emoji = {True: "📡", False: "⚫"}
+
+    lines = [
+        f"{status_emoji[t.active]} {connected_emoji[manager.is_connected(t.id)]} "
+        f"**{t.name}** (ID: {t.id}) — {t.type.value}"
+        + (f" — {t.location}" if t.location else "")
+        for t in terminals
+    ]
+
+    embed = discord.Embed(
+        title="🖥️ Terminals",
+        description="\n".join(lines),
+        color=discord.Color.blue(),
+    )
+    embed.set_footer(text="🟢 active  🔴 inactive  📡 connected  ⚫ offline")
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 # READY
 @client.event
