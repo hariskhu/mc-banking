@@ -279,15 +279,15 @@ async def request_withdrawal(
     # Check barrel capacity via the terminal connection
     # We estimate slots needed on the backend as a sanity check
     total_slots = sum(
-    slots_needed_for_withdrawal(item["mc_id"], item["quantity"])
-    for item in items
-)
-
-if total_slots > 27:
-    raise ValueError(
-        f"Withdrawal requires {total_slots} barrel slots but a barrel only has 27. "
-        f"Try withdrawing in smaller amounts."
+        slots_needed_for_withdrawal(item["mc_id"], item["quantity"])
+        for item in items
     )
+
+    if total_slots > 27:
+        raise ValueError(
+            f"Withdrawal requires {total_slots} barrel slots but a barrel only has 27. "
+            f"Try withdrawing in smaller amounts."
+        )
 
     process_withdrawal(session, discord_id, items)
 
