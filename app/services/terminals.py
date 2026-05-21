@@ -226,6 +226,41 @@ def get_service_listings(session: Session, terminal_id: int) -> list[ServiceList
         .where(ServiceListing.terminal_id == terminal_id, ServiceListing.active == True)
     ).all()
 
+def slots_needed_for_withdrawal(mc_id: str, quantity: int) -> int:
+    COMPRESS_FORMS = {
+        "create:copper_nugget":   {"per_ingot": 9,  "per_block": 81},
+        "create:zinc_nugget":     {"per_ingot": 9,  "per_block": 81},
+        "minecraft:iron_nugget":  {"per_ingot": 9,  "per_block": 81},
+        "minecraft:gold_nugget":  {"per_ingot": 9,  "per_block": 81},
+        "minecraft:diamond":      {"per_ingot": None, "per_block": 9},
+    }
+
+    forms = COMPRESS_FORMS.get(mc_id)
+    if not forms:
+        return math.ceil(quantity / 64)
+
+    remaining = quantity
+    slots     = 0
+
+    # Blocks
+    blocks = math.floor(remaining / forms["per_block"])
+    if blocks > 0:
+        slots     += math.ceil(blocks / 64)
+        remaining -= blocks * forms["per_block"]
+
+    # Ingots
+    if forms["per_ingot"] and remaining > 0:
+        ingots = math.floor(remaining / forms["per_ingot"])
+        if ingots > 0:
+            slots     += math.ceil(ingots / 64)
+            remaining -= ingots * forms["per_ingot"]
+
+    # Base units
+    if remaining > 0:
+        slots += math.ceil(remaining / 64)
+
+    return slots
+
 # -------- BANK TERMINALS --------
 async def request_withdrawal(
     session: Session,
@@ -243,17 +278,16 @@ async def request_withdrawal(
 
     # Check barrel capacity via the terminal connection
     # We estimate slots needed on the backend as a sanity check
-    total_slots = 0
-    for item in items:
-        quantity = item["quantity"]
-        # Worst case: all nuggets, no compression possible
-        total_slots += math.ceil(quantity / 64)
+    total_slots = sum(
+    slots_needed_for_withdrawal(item["mc_id"], item["quantity"])
+    for item in items
+)
 
-    if total_slots > 27:
-        raise ValueError(
-            f"Withdrawal is too large to fit in the terminal barrel. "
-            f"Try withdrawing in smaller amounts."
-        )
+if total_slots > 27:
+    raise ValueError(
+        f"Withdrawal requires {total_slots} barrel slots but a barrel only has 27. "
+        f"Try withdrawing in smaller amounts."
+    )
 
     process_withdrawal(session, discord_id, items)
 
