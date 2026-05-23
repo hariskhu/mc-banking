@@ -8,7 +8,7 @@ from app.services.banking import _get_player_account, _get_player_id
 import math
 
 ELASTICITY = Decimal("0.5")
-COPPER_INFLUENCE = Decimal("0.15")
+COPPER_INFLUENCE = Decimal("0")
 PRICE_CAP_MULTIPLIER = Decimal("5") # max price is 4x base price
 
 def seed_materials(session: Session):
@@ -17,7 +17,7 @@ def seed_materials(session: Session):
     ideal_copper = 54*64*9*9 # A double chests of copper blocks
     ideal_zinc = 54*64*9 # A double chest of zinc ingots
     ideal_iron = 2*54*64*9 # Two double chests of iron ingots
-    ideal_gold = 27*64*9 # A chest of gold ingots
+    ideal_gold = 54*64*9 # A chest of gold ingots
     ideal_diamond = 64*3 # Three stacks of diamonds
 
     # Fix wrong copper nugget tag
@@ -29,12 +29,11 @@ def seed_materials(session: Session):
         session.commit()
 
     defaults = [
-        {"name": "Copper Nugget",  "mc_id": "create:copper_nugget", "base_price": Decimal("0.01"),  "ideal_supply": ideal_copper},
-        {"name": "Zinc Nugget",    "mc_id": "create:zinc_nugget",      "base_price": Decimal("0.06"),  "ideal_supply": ideal_zinc},
+        {"name": "Copper Nugget",  "mc_id": "create:copper_nugget",    "base_price": Decimal("0.01"),  "ideal_supply": ideal_copper},
         {"name": "Iron Nugget",    "mc_id": "minecraft:iron_nugget",   "base_price": Decimal("0.08"),  "ideal_supply": ideal_iron},
         {"name": "Gold Nugget",    "mc_id": "minecraft:gold_nugget",   "base_price": Decimal("0.12"), "ideal_supply": ideal_gold},
-        # Diamonds convert to 64 copper ingots at base price, 288 nuggets
-        {"name": "Diamond",        "mc_id": "minecraft:diamond",       "base_price": Decimal("5.76"), "ideal_supply": ideal_diamond},
+        {"name": "Zinc Nugget",    "mc_id": "create:zinc_nugget",      "base_price": Decimal("1.00"),  "ideal_supply": ideal_zinc},
+        {"name": "Diamond",        "mc_id": "minecraft:diamond",       "base_price": Decimal("16.00"), "ideal_supply": ideal_diamond},
     ]
     for d in defaults:
         existing = session.scalar(select(Material).where(Material.mc_id == d["mc_id"]))
